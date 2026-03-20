@@ -498,6 +498,26 @@ TraceEventInfo TraceEventInfo::clone() const {
   return TraceEventInfo(KJ_MAP(item, traces) { return item.clone(); });
 }
 
+TracePreview::TracePreview(kj::String id, kj::String slug, kj::String name)
+    : id(kj::mv(id)),
+      slug(kj::mv(slug)),
+      name(kj::mv(name)) {}
+
+TracePreview::TracePreview(rpc::Trace::Preview::Reader reader)
+    : id(kj::str(reader.getId())),
+      slug(kj::str(reader.getSlug())),
+      name(kj::str(reader.getName())) {}
+
+void TracePreview::copyTo(rpc::Trace::Preview::Builder builder) const {
+  builder.setId(id);
+  builder.setSlug(slug);
+  builder.setName(name);
+}
+
+TracePreview TracePreview::clone() const {
+  return TracePreview(kj::str(id), kj::str(slug), kj::str(name));
+}
+
 TraceEventInfo::TraceItem::TraceItem(kj::Maybe<kj::String> scriptName)
     : scriptName(kj::mv(scriptName)) {}
 
@@ -697,6 +717,7 @@ Trace::Trace(kj::Maybe<kj::String> stableId,
     kj::Array<kj::String> scriptTags,
     kj::Maybe<kj::String> entrypoint,
     ExecutionModel executionModel,
+    kj::Maybe<tracing::TracePreview> preview,
     kj::Maybe<kj::String> durableObjectId)
     : stableId(kj::mv(stableId)),
       scriptName(kj::mv(scriptName)),
@@ -705,6 +726,7 @@ Trace::Trace(kj::Maybe<kj::String> stableId,
       scriptId(kj::mv(scriptId)),
       scriptTags(kj::mv(scriptTags)),
       entrypoint(kj::mv(entrypoint)),
+      preview(kj::mv(preview)),
       durableObjectId(kj::mv(durableObjectId)),
       executionModel(executionModel) {}
 Trace::Trace(rpc::Trace::Reader reader) {
@@ -762,6 +784,10 @@ void Trace::copyTo(rpc::Trace::Builder builder) const {
 
   KJ_IF_SOME(e, entrypoint) {
     builder.setEntrypoint(e);
+  }
+
+  KJ_IF_SOME(p, preview) {
+    p.copyTo(builder.initPreview());
   }
 
   KJ_IF_SOME(id, durableObjectId) {
@@ -872,6 +898,10 @@ void Trace::mergeFrom(rpc::Trace::Reader reader, PipelineLogLevel pipelineLogLev
 
   if (reader.hasEntrypoint()) {
     entrypoint = kj::str(reader.getEntrypoint());
+  }
+
+  if (reader.hasPreview()) {
+    preview = tracing::TracePreview(reader.getPreview());
   }
 
   if (reader.hasDurableObjectId()) {

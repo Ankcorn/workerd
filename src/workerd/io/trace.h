@@ -423,6 +423,21 @@ struct EmailEventInfo final {
 };
 
 // Describes a buffered tail worker request
+struct TracePreview final {
+  explicit TracePreview(kj::String id, kj::String slug, kj::String name);
+  TracePreview(rpc::Trace::Preview::Reader reader);
+  TracePreview(TracePreview&&) = default;
+  TracePreview& operator=(TracePreview&&) = default;
+  KJ_DISALLOW_COPY(TracePreview);
+
+  kj::String id;
+  kj::String slug;
+  kj::String name;
+
+  void copyTo(rpc::Trace::Preview::Builder builder) const;
+  TracePreview clone() const;
+};
+
 struct TraceEventInfo final {
   struct TraceItem;
 
@@ -885,6 +900,7 @@ class Trace final: public kj::Refcounted {
       kj::Array<kj::String> scriptTags,
       kj::Maybe<kj::String> entrypoint,
       ExecutionModel executionModel,
+      kj::Maybe<tracing::TracePreview> preview = kj::none,
       kj::Maybe<kj::String> durableObjectId = kj::none);
   Trace(rpc::Trace::Reader reader);
   ~Trace() noexcept(false);
@@ -908,6 +924,7 @@ class Trace final: public kj::Refcounted {
   kj::Array<kj::String> scriptTags;
   kj::Maybe<kj::Array<tracing::Attribute>> tailAttributes;
   kj::Maybe<kj::String> entrypoint;
+  kj::Maybe<tracing::TracePreview> preview;
   kj::Maybe<kj::String> durableObjectId;
 
   kj::Vector<tracing::Log> logs;
