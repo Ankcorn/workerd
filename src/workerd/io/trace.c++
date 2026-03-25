@@ -717,8 +717,8 @@ Trace::Trace(kj::Maybe<kj::String> stableId,
     kj::Array<kj::String> scriptTags,
     kj::Maybe<kj::String> entrypoint,
     ExecutionModel executionModel,
-    kj::Maybe<tracing::TracePreview> preview,
-    kj::Maybe<kj::String> durableObjectId)
+    kj::Maybe<kj::String> durableObjectId,
+    kj::Maybe<tracing::TracePreview> preview)
     : stableId(kj::mv(stableId)),
       scriptName(kj::mv(scriptName)),
       scriptVersion(kj::mv(scriptVersion)),

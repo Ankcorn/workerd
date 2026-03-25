@@ -901,8 +901,8 @@ class Trace final: public kj::Refcounted {
       kj::Array<kj::String> scriptTags,
       kj::Maybe<kj::String> entrypoint,
       ExecutionModel executionModel,
-      kj::Maybe<tracing::TracePreview> preview = kj::none,
-      kj::Maybe<kj::String> durableObjectId = kj::none);
+      kj::Maybe<kj::String> durableObjectId = kj::none,
+      kj::Maybe<tracing::TracePreview> preview = kj::none);
   Trace(rpc::Trace::Reader reader);
   ~Trace() noexcept(false);
   KJ_DISALLOW_COPY_AND_MOVE(Trace);

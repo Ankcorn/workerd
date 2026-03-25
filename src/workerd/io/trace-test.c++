@@ -595,6 +595,7 @@ KJ_TEST("Trace with Preview") {
       kj::str("test-namespace"), kj::str("test-script-id"),
       kj::Array<kj::String>(),  // scriptTags
       kj::str("test-entrypoint"), ExecutionModel::STATELESS,
+      kj::none,  // durableObjectId
       TracePreview(kj::str("63bafce9179948688866bb22268eb1c6"), kj::str("feature-my-branch"),
           kj::str("feature/my-branch")));
 
@@ -615,7 +616,6 @@ KJ_TEST("Trace with Durable Object ID") {
       kj::str("test-namespace"), kj::str("test-script-id"),
       kj::Array<kj::String>(),  // scriptTags
       kj::str("test-entrypoint"), ExecutionModel::DURABLE_OBJECT,
-      kj::none,  // preview
       kj::str("abc123def456")  // durableObjectId
   );
 
