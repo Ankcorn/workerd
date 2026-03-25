@@ -481,6 +481,10 @@ KJ_TEST("Read/Write Onset works") {
   Onset info(staticSpanId, Onset::Info(kj::mv(fetchInfo)),
       {
         .scriptName = kj::str("foo"),
+        .preview = TracePreview(
+            kj::str("63bafce9179948688866bb22268eb1c6"),
+            kj::str("feature-my-branch"),
+            kj::str("feature/my-branch")),
       },
       nullptr);
   info.copyTo(infoBuilder);
@@ -491,12 +495,20 @@ KJ_TEST("Read/Write Onset works") {
   KJ_ASSERT(fetchInfo2.method == kj::HttpMethod::GET);
   KJ_ASSERT(fetchInfo2.url == "https://example.com"_kj);
   KJ_ASSERT(info2.workerInfo.executionModel == ExecutionModel::STATELESS);
+  auto& preview2 = KJ_ASSERT_NONNULL(info2.workerInfo.preview);
+  KJ_ASSERT(preview2.id == "63bafce9179948688866bb22268eb1c6"_kj);
+  KJ_ASSERT(preview2.slug == "feature-my-branch"_kj);
+  KJ_ASSERT(preview2.name == "feature/my-branch"_kj);
 
   Onset info3 = info.clone();
   FetchEventInfo& fetchInfo3 = KJ_ASSERT_NONNULL(info3.info.tryGet<FetchEventInfo>());
   KJ_ASSERT(fetchInfo3.method == kj::HttpMethod::GET);
   KJ_ASSERT(fetchInfo3.url == "https://example.com"_kj);
   KJ_ASSERT(info3.workerInfo.executionModel == ExecutionModel::STATELESS);
+  auto& preview3 = KJ_ASSERT_NONNULL(info3.workerInfo.preview);
+  KJ_ASSERT(preview3.id == "63bafce9179948688866bb22268eb1c6"_kj);
+  KJ_ASSERT(preview3.slug == "feature-my-branch"_kj);
+  KJ_ASSERT(preview3.name == "feature/my-branch"_kj);
 }
 
 KJ_TEST("Read/Write Outcome works") {

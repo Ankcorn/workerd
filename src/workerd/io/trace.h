@@ -772,6 +772,7 @@ struct Onset final {
     ExecutionModel executionModel = ExecutionModel::STATELESS;
     kj::Maybe<kj::String> scriptName;
     kj::Maybe<kj::Own<ScriptVersion::Reader>> scriptVersion;
+    kj::Maybe<TracePreview> preview;
     kj::Maybe<kj::String> dispatchNamespace;
     kj::Maybe<kj::String> scriptId;
     kj::Maybe<kj::Array<kj::String>> scriptTags;

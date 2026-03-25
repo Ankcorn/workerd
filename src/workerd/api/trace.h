@@ -669,7 +669,8 @@ class TraceCustomEvent final: public WorkerInterface::CustomEvent {
 };
 
 #define EW_TRACE_ISOLATE_TYPES                                                                     \
-  api::ScriptVersion, api::TailEvent, api::TraceItem, api::TraceItem::AlarmEventInfo,              \
+  api::Preview, api::ScriptVersion, api::TailEvent, api::TraceItem,                                 \
+      api::TraceItem::AlarmEventInfo,                                                                \
       api::TraceItem::CustomEventInfo, api::TraceItem::ScheduledEventInfo,                         \
       api::TraceItem::QueueEventInfo, api::TraceItem::EmailEventInfo,                              \
       api::TraceItem::TailEventInfo, api::TraceItem::TailEventInfo::TailItem,                      \
