@@ -362,6 +362,15 @@ struct JsRpcEventInfo final {
   kj::String toString() const;
 };
 
+class ConnectEventInfo {
+ public:
+  explicit ConnectEventInfo();
+  explicit ConnectEventInfo(rpc::Trace::ConnectEventInfo::Reader reader);
+
+  void copyTo(rpc::Trace::ConnectEventInfo::Builder builder) const;
+  ConnectEventInfo clone() const;
+};
+
 // Describes a scheduled request
 struct ScheduledEventInfo final {
   explicit ScheduledEventInfo(double scheduledTime, kj::String cron);
@@ -425,7 +434,7 @@ struct EmailEventInfo final {
 // Describes a buffered tail worker request
 struct TracePreview final {
   explicit TracePreview(kj::String id, kj::String slug, kj::String name);
-  TracePreview(rpc::Trace::Preview::Reader reader);
+  TracePreview(rpc::Trace::TracePreviewInfo::Reader reader);
   TracePreview(TracePreview&&) = default;
   TracePreview& operator=(TracePreview&&) = default;
   KJ_DISALLOW_COPY(TracePreview);
@@ -434,7 +443,7 @@ struct TracePreview final {
   kj::String slug;
   kj::String name;
 
-  void copyTo(rpc::Trace::Preview::Builder builder) const;
+  void copyTo(rpc::Trace::TracePreviewInfo::Builder builder) const;
   TracePreview clone() const;
 };
 
@@ -592,6 +601,7 @@ using EventInfo = kj::OneOf<FetchEventInfo,
     EmailEventInfo,
     TraceEventInfo,
     HibernatableWebSocketEventInfo,
+    ConnectEventInfo,
     CustomEventInfo>;
 
 EventInfo cloneEventInfo(const EventInfo& info);

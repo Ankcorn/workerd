@@ -164,6 +164,9 @@ kj::Maybe<TraceItem::EventInfo> getTraceEvent(jsg::Lock& js, const Trace& trace)
       KJ_CASE_ONEOF(scheduled, tracing::ScheduledEventInfo) {
         return kj::Maybe(js.alloc<TraceItem::ScheduledEventInfo>(trace, scheduled));
       }
+      KJ_CASE_ONEOF(connect, tracing::ConnectEventInfo) {
+        return kj::Maybe(jsg::alloc<TraceItem::ConnectEventInfo>(js, trace, connect));
+      }
       KJ_CASE_ONEOF(alarm, tracing::AlarmEventInfo) {
         return kj::Maybe(js.alloc<TraceItem::AlarmEventInfo>(trace, alarm));
       }
@@ -213,7 +216,7 @@ TraceItem::TraceItem(jsg::Lock& js, const Trace& trace)
       scriptTags(getTraceScriptTags(trace)),
       tailAttributes(trace.tailAttributes.map(
           [](auto& tags) { return KJ_MAP(tag, tags) { return tag.clone(); }; })),
-      preview(trace.preview.map([](auto& p) { return Preview(p); })),
+      preview(trace.preview.map([](auto& p) { return TracePreviewInfo(p); })),
       durableObjectId(mapCopyString(trace.durableObjectId)),
       executionModel(kj::str(trace.executionModel)),
       outcome(kj::str(trace.outcome)),
@@ -249,6 +252,9 @@ kj::Maybe<TraceItem::EventInfo> TraceItem::getEvent(jsg::Lock& js) {
         return info.addRef();
       }
       KJ_CASE_ONEOF(info, jsg::Ref<CustomEventInfo>) {
+        return info.addRef();
+      }
+      KJ_CASE_ONEOF(info, jsg::Ref<ConnectEventInfo>) {
         return info.addRef();
       }
     }
@@ -307,7 +313,7 @@ jsg::Optional<jsg::Dict<TraceItem::TailAttributeValue>> TraceItem::getTailAttrib
   });
 }
 
-jsg::Optional<Preview> TraceItem::getPreview() {
+jsg::Optional<TracePreviewInfo> TraceItem::getPreview() {
   return preview;
 }
 
@@ -542,12 +548,12 @@ ScriptVersion::ScriptVersion(const ScriptVersion& other)
       tag{mapCopyString(other.tag)},
       message{mapCopyString(other.message)} {}
 
-Preview::Preview(const tracing::TracePreview& preview)
+TracePreviewInfo::TracePreviewInfo(const tracing::TracePreview& preview)
     : id(kj::str(preview.id)),
       slug(kj::str(preview.slug)),
       name(kj::str(preview.name)) {}
 
-Preview::Preview(const Preview& other)
+TracePreviewInfo::TracePreviewInfo(const TracePreviewInfo& other)
     : id(kj::str(other.id)),
       slug(kj::str(other.slug)),
       name(kj::str(other.name)) {}
@@ -764,6 +770,9 @@ void TraceItem::visitForMemoryInfo(jsg::MemoryTracker& tracker) const {
       KJ_CASE_ONEOF(info, jsg::Ref<HibernatableWebSocketEventInfo>) {
         tracker.trackField("eventInfo", info);
       }
+      KJ_CASE_ONEOF(info, jsg::Ref<ConnectEventInfo>) {
+        tracker.trackField("eventInfo", info);
+      }
     }
   }
   for (const auto& log: logs) {
@@ -787,19 +796,8 @@ void TraceItem::visitForMemoryInfo(jsg::MemoryTracker& tracker) const {
     for (const auto& tag: tags) {
       tracker.trackFieldWithSize("tailAttributeName", tag.name.size());
       for (const auto& value: tag.value) {
-        KJ_SWITCH_ONEOF(value) {
-          KJ_CASE_ONEOF(boolean, bool) {
-            tracker.trackFieldWithSize("tailAttributeValue", sizeof(boolean));
-          }
-          KJ_CASE_ONEOF(number, double) {
-            tracker.trackFieldWithSize("tailAttributeValue", sizeof(number));
-          }
-          KJ_CASE_ONEOF(integer, int64_t) {
-            tracker.trackFieldWithSize("tailAttributeValue", sizeof(integer));
-          }
-          KJ_CASE_ONEOF(string, kj::ConstString) {
-            tracker.trackFieldWithSize("tailAttributeValue", string.size());
-          }
+        KJ_IF_SOME(string, value.tryGet<kj::ConstString>()) {
+          tracker.trackFieldWithSize("tailAttributeValue", string.size());
         }
       }
     }
@@ -833,5 +831,8 @@ void TraceItem::HibernatableWebSocketEventInfo::visitForMemoryInfo(
     }
   }
 }
+
+TraceItem::ConnectEventInfo::ConnectEventInfo(
+    jsg::Lock& js, const Trace& trace, const tracing::ConnectEventInfo& eventInfo) {}
 
 }  // namespace workerd::api

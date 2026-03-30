@@ -481,10 +481,8 @@ KJ_TEST("Read/Write Onset works") {
   Onset info(staticSpanId, Onset::Info(kj::mv(fetchInfo)),
       {
         .scriptName = kj::str("foo"),
-        .preview = TracePreview(
-            kj::str("63bafce9179948688866bb22268eb1c6"),
-            kj::str("feature-my-branch"),
-            kj::str("feature/my-branch")),
+        .preview = TracePreview(kj::str("63bafce9179948688866bb22268eb1c6"),
+            kj::str("feature-my-branch"), kj::str("feature/my-branch")),
       },
       nullptr);
   info.copyTo(infoBuilder);

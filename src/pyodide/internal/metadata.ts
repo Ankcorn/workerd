@@ -13,6 +13,7 @@ export const SHOULD_SNAPSHOT_TO_DISK = MetadataReader.shouldSnapshotToDisk();
 export const IS_CREATING_BASELINE_SNAPSHOT =
   MetadataReader.isCreatingBaselineSnapshot();
 export const IS_EW_VALIDATING = ArtifactBundler.isEwValidating();
+export const IS_DYNAMIC_WORKER = ArtifactBundler.isDynamicWorker();
 export const IS_CREATING_SNAPSHOT = IS_EW_VALIDATING || SHOULD_SNAPSHOT_TO_DISK;
 
 // There are two validations that we perform. The first one runs without a _bundled_ memory snapshot
@@ -65,11 +66,10 @@ const FORCE_NEW_VENDOR_PATH: boolean =
   !!COMPATIBILITY_FLAGS.python_workers_force_new_vendor_path;
 export const IS_DEDICATED_SNAPSHOT_ENABLED: boolean =
   !!COMPATIBILITY_FLAGS.python_dedicated_snapshot;
-const EXTERNAL_SDK = !!COMPATIBILITY_FLAGS.enable_python_external_sdk;
+export const EXTERNAL_SDK = !!COMPATIBILITY_FLAGS.enable_python_external_sdk;
 
 export const LEGACY_GLOBAL_HANDLERS = !NO_GLOBAL_HANDLERS;
 export const LEGACY_VENDOR_PATH = !FORCE_NEW_VENDOR_PATH;
-export const LEGACY_INCLUDE_SDK = !EXTERNAL_SDK;
 export const CHECK_RNG_STATE = !!COMPATIBILITY_FLAGS.python_check_rng_state;
 
 export const setCpuLimitNearlyExceededCallback =
