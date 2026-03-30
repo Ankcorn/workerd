@@ -47,7 +47,13 @@ export type AiOptions = {
    * @deprecated this option is deprecated, do not use this
    */
   sessionOptions?: SessionOptions;
+  signal?: AbortSignal;
 };
+
+type CleanedAiOptions = Omit<
+  AiOptions,
+  'prefix' | 'extraHeaders' | 'sessionOptions' | 'signal'
+>;
 
 export type AiInputReadableStream = {
   body: ReadableStream | FormData;
@@ -156,16 +162,16 @@ export class Ai {
    * */
   async #generateFetch(
     inputs: object,
-    options: AiOptions,
+    cleanedOptions: CleanedAiOptions,
     model: string
   ): Promise<Response> {
     // Treat inputs as regular JS objects
     const body = JSON.stringify({
       inputs,
-      options,
+      options: cleanedOptions,
     });
 
-    const fetchOptions = {
+    const fetchOptions: RequestInit = {
       method: 'POST',
       body: body,
       headers: {
@@ -176,9 +182,12 @@ export class Ai {
         'cf-consn-model-id': `${this.#options.prefix ? `${this.#options.prefix}:` : ''}${model}`,
       },
     };
+    if (this.#options.signal) {
+      fetchOptions.signal = this.#options.signal;
+    }
 
     let endpointUrl = `${this.#endpointURL}/run?version=3`;
-    if (options.gateway?.id) {
+    if (cleanedOptions.gateway?.id) {
       endpointUrl = `${this.#endpointURL}/ai-gateway/run?version=3`;
     }
 
@@ -190,7 +199,7 @@ export class Ai {
    * */
   async #generateStreamFetch(
     inputs: Record<string, string | AiInputReadableStream>,
-    options: AiOptions,
+    cleanedOptions: CleanedAiOptions,
     model: string,
     streamKeys: string[]
   ): Promise<Response> {
@@ -199,7 +208,7 @@ export class Ai {
     const body = (stream as AiInputReadableStream).body;
     const contentType = (stream as AiInputReadableStream).contentType;
 
-    if (options.gateway?.id) {
+    if (cleanedOptions.gateway?.id) {
       throw new AiInternalError(
         'AI Gateway does not support ReadableStreams yet.'
       );
@@ -214,7 +223,7 @@ export class Ai {
     }
 
     // Pass single ReadableStream in request body
-    const fetchOptions = {
+    const fetchOptions: RequestInit = {
       method: 'POST',
       body: body,
       headers: {
@@ -225,6 +234,9 @@ export class Ai {
         'cf-consn-model-id': `${this.#options.prefix ? `${this.#options.prefix}:` : ''}${model}`,
       },
     };
+    if (this.#options.signal) {
+      fetchOptions.signal = this.#options.signal;
+    }
 
     // Fetch the additional input params
     const { [streamKey]: streamInput, ...userInputs } = inputs;
@@ -232,7 +244,7 @@ export class Ai {
     // Construct query params
     // Append inputs with ai.run options that are passed to the inference request
     const query = {
-      ...options,
+      ...cleanedOptions,
       version: '3',
       userInputs: JSON.stringify({ ...userInputs }),
     };
@@ -249,16 +261,16 @@ export class Ai {
    * */
   async #generateWebsocketFetch(
     inputs: object,
-    options: AiOptions,
+    cleanedOptions: CleanedAiOptions,
     model: string
   ): Promise<Response> {
     // Treat inputs as regular JS objects
     const body = JSON.stringify({
       inputs,
-      options,
+      options: cleanedOptions,
     });
 
-    const fetchOptions = {
+    const fetchOptions: RequestInit = {
       headers: {
         ...this.#options.sessionOptions?.extraHeaders,
         ...this.#options.extraHeaders,
@@ -267,6 +279,9 @@ export class Ai {
         Upgrade: 'websocket',
       },
     };
+    if (this.#options.signal) {
+      fetchOptions.signal = this.#options.signal;
+    }
 
     const aiEndpoint = new URL(`${this.#endpointURL}/run`);
     aiEndpoint.searchParams.set('version', '3');
@@ -288,13 +303,14 @@ export class Ai {
       prefix,
       extraHeaders,
       sessionOptions,
+      signal,
       ...object
-    }): object => object)(this.#options);
+    }): CleanedAiOptions => object)(this.#options);
 
     let res: Response;
 
     if (this.#options.websocket) {
-      res = await this.#generateWebsocketFetch(inputs, options, model);
+      res = await this.#generateWebsocketFetch(inputs, cleanedOptions, model);
     } else {
       /**
        * Inputs that contain a ReadableStream which will be sent directly to
@@ -311,7 +327,7 @@ export class Ai {
       } else {
         res = await this.#generateStreamFetch(
           inputs,
-          options,
+          cleanedOptions,
           model,
           streamKeys
         );
