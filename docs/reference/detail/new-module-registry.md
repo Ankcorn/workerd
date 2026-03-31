@@ -118,6 +118,19 @@ IsolateModuleRegistry
 | `EVAL` | 0x04 | Requires evaluation outside IoContext (deferred to `EvalCallback`) |
 | `WASM` | 0x08 | WebAssembly module                                                 |
 
+### `Module::ContentType` enum
+
+Used to validate import attributes (e.g. `with { type: 'json' }`). Set at
+module construction time.
+
+| ContentType | Meaning                                              |
+| ----------- | ---------------------------------------------------- |
+| `NONE`      | No specific content type (ESM, CJS, builtin objects) |
+| `JSON`      | JSON module                                          |
+| `TEXT`      | Text module                                          |
+| `DATA`      | Data/binary module                                   |
+| `WASM`      | WebAssembly module                                   |
+
 ## Module Subclasses
 
 `Module` is an abstract base class. Two concrete implementations exist
@@ -165,9 +178,14 @@ SyntheticModule extends Module {
 
 - `getDescriptor()`: Calls `v8::Module::CreateSyntheticModule` with the declared
   export names (always includes `"default"` plus any `namedExports`).
-- `evaluate()`: Creates a resolved Promise, calls the `callback` which uses the
-  `ModuleNamespace` helper to set exports via `SetSyntheticModuleExport`.
-- For modules with `Flags::EVAL`, delegates to the `Evaluator` first.
+- `evaluate()`: Ensures the module is instantiated, optionally delegates to the
+  `Evaluator` (for `Flags::EVAL` modules), then calls `module->Evaluate()` to
+  enter V8's status machine. V8 calls back into `evaluationSteps` which calls
+  `actuallyEvaluate()`.
+- `actuallyEvaluate()`: Creates a resolved Promise, calls the `callback` which
+  uses the `ModuleNamespace` helper to set exports via
+  `SetSyntheticModuleExport`. This is always invoked via V8's evaluation steps
+  callback, never called directly from external code.
 
 ### Static `evaluationSteps` Callback
 
@@ -177,7 +195,14 @@ as the V8 `SyntheticModuleEvaluationSteps`. When V8 calls it:
 1. Gets the `IsolateModuleRegistry` from context embedder data.
 2. Looks up the `Entry` by v8::Module identity (hash-indexed, O(1) — unlike the
    legacy registry's O(n) linear scan).
-3. Calls `module.evaluate()` on the found entry.
+3. Calls `actuallyEvaluate()` on the found module — not `evaluate()`, to avoid
+   reentry into `module->Evaluate()`.
+
+This design ensures V8 always manages the status transitions (`kEvaluating` →
+`kEvaluated` or `kErrored`) regardless of whether evaluation was initiated by
+V8 (static import) or by our code (dynamic import, require). The `evaluate()`
+method is the external entry point that goes through V8; `evaluationSteps` is
+V8's callback entry point that goes directly to the work.
 
 ## ModuleBundle — Sources of Modules
 
@@ -355,17 +380,22 @@ builder.setEvalCallback([](Lock& js, const auto& module, auto v8Module,
 ### How it flows
 
 1. `module.evaluate(js, v8Module, observer, evaluator)` is called.
-2. For modules with `Flags::EVAL` set (all ESM modules, and synthetic modules
-   that opt in):
+2. For ESM modules (`Flags::EVAL` always set):
    - The `evaluator(js, module, v8Module, observer)` is invoked.
    - The evaluator calls `ModuleRegistry::evaluateImpl` which invokes the
-     `EvalCallback`.
-   - If the callback returns a `Promise<Value>`, it is wrapped and returned.
-3. If the evaluator returns `kj::none` (no callback set), or the module doesn't
-   have `Flags::EVAL`, the module's `actuallyEvaluate()` is called directly.
-4. For ESM: `actuallyEvaluate` calls `v8::Module::Evaluate()`.
-5. For Synthetic: `actuallyEvaluate` creates a resolved Promise, then invokes
-   the synthetic `callback` to set exports.
+     `EvalCallback` (wrapping evaluation in `SuppressIoContextScope`).
+   - The `EvalCallback` calls `v8Module->Evaluate()`. V8 evaluates the
+     source text directly.
+3. For Synthetic modules (dynamic import and require paths):
+   - If `Flags::EVAL` is set, the evaluator is invoked first (same as ESM).
+   - Otherwise, `module->Evaluate()` is called directly.
+   - V8 sets status to `kEvaluating` and calls the `evaluationSteps` callback.
+   - `evaluationSteps` calls `actuallyEvaluate()` which runs the callback
+     to set exports.
+   - V8 receives the result and sets status to `kEvaluated` or `kErrored`.
+4. For static imports of synthetic modules, V8 drives `Module::Evaluate()`
+   itself, which calls `evaluationSteps` → `actuallyEvaluate()`. The same
+   code path executes; only the initial caller differs.
 
 ## `import.meta` Support
 
@@ -419,12 +449,14 @@ compile cache).
 `Module::newCjsStyleModuleHandler<T, TypeWrapper>` is a template that creates a
 handler for CommonJS-style modules:
 
-1. Guards against re-evaluation with `EvaluateOnce` (CJS modules evaluate once).
-2. Allocates a JSG resource object of type `T` (e.g. `CommonJsModuleContext`).
-3. Compiles the source as a function via `ScriptCompiler::CompileFunction` with
+1. Allocates a JSG resource object of type `T` (e.g. `CommonJsModuleContext`).
+2. Compiles the source as a function via `ScriptCompiler::CompileFunction` with
    the JSG object as extension object (providing `module`, `exports`, `require`).
-4. Calls the compiled function.
-5. Extracts `exports` from the JSG object and sets them on the module namespace.
+3. Calls the compiled function.
+4. Extracts `exports` from the JSG object and sets them on the module namespace.
+
+Re-evaluation is prevented by V8's module status machine (`kEvaluated` prevents
+re-entry), not by application-level guards.
 
 ## Specifier Processing
 
@@ -622,6 +654,22 @@ Aliases are single-level redirects. When a bundle lookup returns a string
 2. `lookupImpl` recurses with the new specifier, but with a `recursed=true`
    flag that prevents further recursion. Only one level of aliasing is supported.
 
+### Error Propagation for Errored Dependencies
+
+V8's `InnerModuleEvaluation` only recurses into `SourceTextModule` dependencies
+when checking for `kErrored` status — it skips `SyntheticModule` dependencies
+entirely. This means if a synthetic module is `kErrored`, an ESM that imports
+it would evaluate successfully with `undefined` export values instead of
+propagating the error.
+
+To work around this, `resolveModuleCallback` checks the resolved module's
+status after resolution. If the module is `kErrored`, the callback throws the
+module's cached exception instead of returning the handle to V8. This prevents
+V8 from instantiating an ESM graph containing errored synthetic dependencies.
+
+Similarly, `dynamicResolve` checks for `kErrored` before calling `evaluate()`,
+returning a rejected promise with the cached exception.
+
 ## Thread Safety Model
 
 ### Shared State (ModuleRegistry, ModuleBundle, Module)
@@ -667,14 +715,46 @@ Aliases are single-level redirects. When a bundle lookup returns a string
    functions can be called multiple times from multiple isolates. They create
    fresh JS objects each time.
 
-7. **Import attributes are rejected.** The current implementation throws
-   `TypeError` for any import attributes. This is the spec-recommended default
-   for unrecognized attributes.
+7. **Import attributes are validated.** The `type` import attribute is supported
+   for both static and dynamic imports. Each `Module` has a `ContentType`
+   (`NONE`, `JSON`, `TEXT`, `DATA`, `WASM`) set at construction time. Supported
+   type values and their corresponding TC39 proposals:
+   - `type: 'json'` — JSON Modules (TC39 Stage 4, finished) → `ContentType::JSON`.
+     This is the only type currently enabled.
+   - `type: 'text'` — Import Text (TC39 Stage 3) → `ContentType::TEXT`.
+     Recognized but rejected with "not yet supported" pending Stage 4.
+   - `type: 'bytes'` — Import Bytes (TC39 Stage 2.7) → `ContentType::DATA`.
+     Recognized but rejected with "not yet supported". The proposal requires
+     `Uint8Array` backed by an immutable `ArrayBuffer`, which is not yet
+     implemented. Data modules currently expose mutable `ArrayBuffer`s.
+     All three types are parsed in `parseImportAttributes`. Only `json` passes
+     validation in `validateImportType`; `text` and `bytes` are rejected there
+     with specific error messages. The `ContentType` enum and module tagging are
+     fully plumbed for all three, ready to enable when the proposals are ready.
+     When a type attribute is specified, the resolved module's content type must
+     match or a `TypeError` is thrown. Unrecognized attribute keys (anything
+     other than `type`) and unsupported type values are rejected with `TypeError`.
+     Attribute parsing is handled
+     by `parseImportAttributes()` which reads V8's `FixedArray` of key-value-
+     location triples. Validation is handled by `validateImportType()` which
+     compares the declared type against `Module::contentType()`. Both static
+     imports (`resolveModuleCallback`) and dynamic imports
+     (`dynamicImportModuleCallback` → `dynamicResolve`) use these helpers.
 
-8. **No `require(esm)` convention matching.** Unlike the legacy registry which
-   had complex `require()` return value logic (checking `__cjsUnwrapDefault`,
-   `module.exports` key, etc.), the new registry's `require()` always returns
-   the full module namespace. CJS interop is handled at the module handler level.
+8. **`require()` return value semantics (UNWRAP_DEFAULT).** When callers use the
+   `UNWRAP_DEFAULT` require option (used by `createRequire` and
+   `CommonJsModuleContext::require`), the return value depends on the module type:
+   - **User bundle ESM**: returns the module namespace (matching Node.js
+     `require(esm)` behavior), unless the module exports `__cjsUnwrapDefault`
+     as truthy (a convention used by bundlers like esbuild when transpiling CJS
+     to ESM), in which case the `default` export is returned.
+   - **Builtin ESM** (`node:assert`, `node:buffer`, etc.): returns the `default`
+     export, because workerd implements builtins as ESM that wrap CJS-style APIs
+     in a default export.
+   - **Synthetic modules** (CJS, JSON, Text, Data, WASM): returns the `default`
+     export, which is where the module's value lives (`module.exports` for CJS,
+     parsed value for JSON, etc.).
+     Without `UNWRAP_DEFAULT`, `require()` always returns the full module namespace.
 
 9. **Python modules are not yet supported.** The new registry currently throws
    `KJ_FAIL_ASSERT` for `PythonModule` content. Python support remains on the

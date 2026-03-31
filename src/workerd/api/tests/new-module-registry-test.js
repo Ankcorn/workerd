@@ -7,6 +7,7 @@ import {
   ok,
   rejects,
   strictEqual,
+  throws,
   deepStrictEqual,
 } from 'assert'; // Intentionally omit the 'node:' prefix
 import { foo, default as def } from 'foo';
@@ -190,6 +191,17 @@ await rejects(import('%90%E8%54%C1'), {
   message: /Module not found/,
 });
 
+// The cjs6 module attempts to require and esm with a top-level await, which is rejected
+// following node.js' established require(esm) precedent.
+await rejects(import('cjs6'), {
+  message: /^Top-level await is not supported/,
+});
+
+// Cannot directly require an ESM with top-level await either.
+throws(() => myRequire('tla'), {
+  message: /^Top-level await is not supported/,
+});
+
 // Verify that a module is unable to perform IO operations at the top level, even if
 // the dynamic import is initiated within the scope of an active IoContext.
 export const noTopLevelIo = {
@@ -246,15 +258,14 @@ export const queryAndFragment = {
   },
 };
 
-// We do not currently support import attributes. Per the recommendation
-// in the spec, we throw an error when they are encountered.
+// Unrecognized import attributes are rejected.
 export const importAssertionsFail = {
   async test() {
     await rejects(import('ia'), {
-      message: /^Import attributes are not supported/,
+      message: /^Unsupported import attribute: "a"/,
     });
     await rejects(import('foo', { with: { a: 'abc' } }), {
-      message: /^Import attributes are not supported/,
+      message: /^Unsupported import attribute: "a"/,
     });
   },
 };

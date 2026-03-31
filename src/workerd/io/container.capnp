@@ -48,8 +48,11 @@ interface Container @0x9aaceefc06523bca {
     labels @5 :List(Label);
     # Optional key-value metadata labels for metrics/observability.
 
-    snapshots @6 :List(SnapshotRestoreParams);
+    directorySnapshots @6 :List(DirectorySnapshotRestoreParams);
     # Directory snapshots to restore before the container starts.
+
+    containerSnapshotId @7 :Text;
+    # Id of the full container snapshot to restore before the container starts.
   }
 
   struct Label {
@@ -57,13 +60,12 @@ interface Container @0x9aaceefc06523bca {
     value @1 :Text;
   }
 
-  struct SnapshotRestoreParams {
-    snapshot @0 :DirectorySnapshot;
-    # The snapshot to restore.
+  struct DirectorySnapshotRestoreParams {
+    snapshotId @0 :Text;
+    # The id of the snapshot to restore.
 
-    mountPoint @1 :Text;
-    # Where to mount the snapshot in the container filesystem.
-    # If empty, the snapshot is restored to its original directory.
+    restorePath @1 :Text;
+    # Where to restore the snapshot in the container filesystem.
   }
 
   struct DirectorySnapshot {
@@ -87,6 +89,24 @@ interface Container @0x9aaceefc06523bca {
     # Directory path to snapshot.
 
     name @1 :Text;
+    # Optional human-friendly name. Empty string means not set.
+  }
+
+  struct ContainerSnapshot {
+    # Opaque handle to a full container snapshot.
+
+    id @0 :Text;
+    # Unique identifier of the snapshot.
+
+    size @1 :UInt64;
+    # Snapshot size, in bytes.
+
+    name @2 :Text;
+    # Optional human-friendly name. Empty string means not set.
+  }
+
+  struct SnapshotContainerParams {
+    name @0 :Text;
     # Optional human-friendly name. Empty string means not set.
   }
 
@@ -181,4 +201,7 @@ interface Container @0x9aaceefc06523bca {
 
   snapshotDirectory @10 SnapshotDirectoryParams -> (snapshot :DirectorySnapshot);
   # Creates a snapshot for a directory in the running container.
+
+  snapshotContainer @11 SnapshotContainerParams -> (snapshot :ContainerSnapshot);
+  # Creates a full container snapshot for the running container.
 }
