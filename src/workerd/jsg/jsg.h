@@ -2563,6 +2563,7 @@ class Lock {
   // Like above, but return a pure-JS promise, not a typed Promise.
   JsPromise rejectedJsPromise(jsg::JsValue exception);
   JsPromise rejectedJsPromise(kj::Exception&& exception, ExceptionToJsOptions options = {});
+  JsPromise resolvedJsPromise(jsg::JsValue value);
 
   // Like `kj::evalNow()`, but returns a jsg::Promise for the result. Synchronous exceptions are
   // caught and returned as a rejected promise.

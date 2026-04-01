@@ -3788,12 +3788,43 @@ export interface Container {
   setInactivityTimeout(durationMs: number | bigint): Promise<void>;
   interceptOutboundHttp(addr: string, binding: Fetcher): Promise<void>;
   interceptAllOutboundHttp(binding: Fetcher): Promise<void>;
+  snapshotDirectory(
+    options: ContainerDirectorySnapshotOptions,
+  ): Promise<ContainerDirectorySnapshot>;
+  snapshotContainer(
+    options: ContainerSnapshotOptions,
+  ): Promise<ContainerSnapshot>;
+  interceptOutboundHttps(addr: string, binding: Fetcher): Promise<void>;
+}
+export interface ContainerDirectorySnapshot {
+  id: string;
+  size: number;
+  dir: string;
+  name?: string;
+}
+export interface ContainerDirectorySnapshotOptions {
+  dir: string;
+  name?: string;
+}
+export interface ContainerDirectorySnapshotRestoreParams {
+  snapshot: ContainerDirectorySnapshot;
+  mountPoint?: string;
+}
+export interface ContainerSnapshot {
+  id: string;
+  size: number;
+  name?: string;
+}
+export interface ContainerSnapshotOptions {
+  name?: string;
 }
 export interface ContainerStartupOptions {
   entrypoint?: string[];
   enableInternet: boolean;
   env?: Record<string, string>;
   labels?: Record<string, string>;
+  directorySnapshots?: ContainerDirectorySnapshotRestoreParams[];
+  containerSnapshot?: ContainerSnapshot;
 }
 /**
  * The **`MessagePort`** interface of the Channel Messaging API represents one of the two ports of a MessageChannel, allowing messages to be sent from one port and listening out for them arriving at the other.
@@ -12215,19 +12246,37 @@ export interface ImageList {
   cursor?: string;
   listComplete: boolean;
 }
-export interface HostedImagesBinding {
+export interface ImageHandle {
   /**
-   * Get detailed metadata for a hosted image
-   * @param imageId The ID of the image (UUID or custom ID)
+   * Get metadata for a hosted image
    * @returns Image metadata, or null if not found
    */
-  details(imageId: string): Promise<ImageMetadata | null>;
+  details(): Promise<ImageMetadata | null>;
   /**
    * Get the raw image data for a hosted image
-   * @param imageId The ID of the image (UUID or custom ID)
    * @returns ReadableStream of image bytes, or null if not found
    */
-  image(imageId: string): Promise<ReadableStream<Uint8Array> | null>;
+  bytes(): Promise<ReadableStream<Uint8Array> | null>;
+  /**
+   * Update hosted image metadata
+   * @param options Properties to update
+   * @returns Updated image metadata
+   * @throws {@link ImagesError} if update fails
+   */
+  update(options: ImageUpdateOptions): Promise<ImageMetadata>;
+  /**
+   * Delete a hosted image
+   * @returns True if deleted, false if not found
+   */
+  delete(): Promise<boolean>;
+}
+export interface HostedImagesBinding {
+  /**
+   * Get a handle for a hosted image
+   * @param imageId The ID of the image (UUID or custom ID)
+   * @returns A handle for per-image operations
+   */
+  image(imageId: string): ImageHandle;
   /**
    * Upload a new hosted image
    * @param image The image file to upload
@@ -12239,20 +12288,6 @@ export interface HostedImagesBinding {
     image: ReadableStream<Uint8Array> | ArrayBuffer,
     options?: ImageUploadOptions,
   ): Promise<ImageMetadata>;
-  /**
-   * Update hosted image metadata
-   * @param imageId The ID of the image
-   * @param options Properties to update
-   * @returns Updated image metadata
-   * @throws {@link ImagesError} if update fails
-   */
-  update(imageId: string, options: ImageUpdateOptions): Promise<ImageMetadata>;
-  /**
-   * Delete a hosted image
-   * @param imageId The ID of the image
-   * @returns True if deleted, false if not found
-   */
-  delete(imageId: string): Promise<boolean>;
   /**
    * List hosted images with pagination
    * @param options List configuration
@@ -13269,14 +13304,13 @@ export interface StreamScopedCaptions {
    * Uploads the caption or subtitle file to the endpoint for a specific BCP47 language.
    * One caption or subtitle file per language is allowed.
    * @param language The BCP 47 language tag for the caption or subtitle.
-   * @param file The caption or subtitle file to upload.
+   * @param input The caption or subtitle stream to upload.
    * @returns The created caption entry.
    * @throws {NotFoundError} if the video is not found
    * @throws {BadRequestError} if the language or file is invalid
-   * @throws {MaxFileSizeError} if the file size is too large
    * @throws {InternalError} if an unexpected error occurs
    */
-  upload(language: string, file: File): Promise<StreamCaption>;
+  upload(language: string, input: ReadableStream): Promise<StreamCaption>;
   /**
    * Generate captions or subtitles for the provided language via AI.
    * @param language The BCP 47 language tag to generate.
@@ -13352,17 +13386,16 @@ export interface StreamVideos {
 export interface StreamWatermarks {
   /**
    * Generate a new watermark profile
-   * @param file The image file to upload
+   * @param input The image stream to upload
    * @param params The watermark creation parameters.
    * @returns The created watermark profile.
    * @throws {BadRequestError} if the parameters are invalid
    * @throws {InvalidURLError} if the URL is invalid
-   * @throws {MaxFileSizeError} if the file size is too large
    * @throws {TooManyWatermarksError} if the number of allowed watermarks is reached
    * @throws {InternalError} if an unexpected error occurs
    */
   generate(
-    file: File,
+    input: ReadableStream,
     params: StreamWatermarkCreateParams,
   ): Promise<StreamWatermark>;
   /**
@@ -13372,7 +13405,6 @@ export interface StreamWatermarks {
    * @returns The created watermark profile.
    * @throws {BadRequestError} if the parameters are invalid
    * @throws {InvalidURLError} if the URL is invalid
-   * @throws {MaxFileSizeError} if the file size is too large
    * @throws {TooManyWatermarksError} if the number of allowed watermarks is reached
    * @throws {InternalError} if an unexpected error occurs
    */

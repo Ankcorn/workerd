@@ -29,11 +29,6 @@ class Container: public jsg::Object {
     jsg::Optional<kj::String> name;
 
     JSG_STRUCT(id, size, dir, name);
-    JSG_STRUCT_TS_OVERRIDE_DYNAMIC(CompatibilityFlags::Reader flags) {
-      if (!flags.getWorkerdExperimental()) {
-        JSG_TS_OVERRIDE(type DirectorySnapshot = never);
-      }
-    }
   };
 
   struct DirectorySnapshotOptions {
@@ -41,11 +36,6 @@ class Container: public jsg::Object {
     jsg::Optional<kj::String> name;
 
     JSG_STRUCT(dir, name);
-    JSG_STRUCT_TS_OVERRIDE_DYNAMIC(CompatibilityFlags::Reader flags) {
-      if (!flags.getWorkerdExperimental()) {
-        JSG_TS_OVERRIDE(type DirectorySnapshotOptions = never);
-      }
-    }
   };
 
   struct DirectorySnapshotRestoreParams {
@@ -53,11 +43,6 @@ class Container: public jsg::Object {
     jsg::Optional<kj::String> mountPoint;
 
     JSG_STRUCT(snapshot, mountPoint);
-    JSG_STRUCT_TS_OVERRIDE_DYNAMIC(CompatibilityFlags::Reader flags) {
-      if (!flags.getWorkerdExperimental()) {
-        JSG_TS_OVERRIDE(type DirectorySnapshotRestoreParams = never);
-      }
-    }
   };
 
   struct Snapshot {
@@ -66,26 +51,12 @@ class Container: public jsg::Object {
     jsg::Optional<kj::String> name;
 
     JSG_STRUCT(id, size, name);
-    JSG_STRUCT_TS_OVERRIDE_DYNAMIC(CompatibilityFlags::Reader flags) {
-      if (!flags.getWorkerdExperimental()) {
-        JSG_TS_OVERRIDE(type Snapshot = never);
-      }
-    }
   };
 
   struct SnapshotOptions {
     jsg::Optional<kj::String> name;
 
     JSG_STRUCT(name);
-    JSG_STRUCT_TS_OVERRIDE_DYNAMIC(CompatibilityFlags::Reader flags) {
-      if (flags.getWorkerdExperimental()) {
-        JSG_TS_OVERRIDE(ContainerSnapshotOptions {
-          name?: string;
-        });
-      } else {
-        JSG_TS_OVERRIDE(type SnapshotOptions = never);
-      }
-    }
   };
 
   struct StartupOptions {
@@ -124,8 +95,8 @@ class Container: public jsg::Object {
           env?: Record<string, string>;
           hardTimeout?: never;
           labels?: Record<string, string>;
-          directorySnapshots?: never;
-          containerSnapshot?: never;
+          directorySnapshots?: ContainerDirectorySnapshotRestoreParams[];
+          containerSnapshot?: ContainerSnapshot;
         });
       }
     }
@@ -164,11 +135,9 @@ class Container: public jsg::Object {
 
     JSG_METHOD(interceptOutboundHttp);
     JSG_METHOD(interceptAllOutboundHttp);
-    if (flags.getWorkerdExperimental()) {
-      JSG_METHOD(interceptOutboundHttps);
-      JSG_METHOD(snapshotDirectory);
-      JSG_METHOD(snapshotContainer);
-    }
+    JSG_METHOD(snapshotDirectory);
+    JSG_METHOD(snapshotContainer);
+    JSG_METHOD(interceptOutboundHttps);
   }
 
   void visitForMemoryInfo(jsg::MemoryTracker& tracker) const {

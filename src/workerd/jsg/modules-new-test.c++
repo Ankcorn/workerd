@@ -2059,7 +2059,7 @@ KJ_TEST("Using a deferred eval callback works") {
                       .setEvalCallback([&called](Lock& js, const Module& module, auto v8Module,
                                            const auto& observer) {
     called = true;
-    return js.resolvedPromise<Value>(js.v8Ref<v8::Value>(js.num(123)));
+    return js.resolvedJsPromise(js.num(123));
   }).finish();
 
   PREAMBLE([&](Lock& js) {

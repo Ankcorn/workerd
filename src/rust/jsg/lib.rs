@@ -7,6 +7,7 @@ use std::num::ParseIntError;
 use std::ops::Deref;
 
 pub mod feature_flags;
+pub mod macros;
 pub mod modules;
 pub mod resource;
 pub mod v8;
@@ -16,6 +17,9 @@ pub use feature_flags::FeatureFlags;
 pub use resource::Rc;
 pub use resource::Resource;
 pub use resource::Weak;
+pub use v8::ArrayBuffer;
+pub use v8::ArrayBufferView;
+pub use v8::BackingStore;
 pub use v8::BigInt64Array;
 pub use v8::BigUint64Array;
 pub use v8::Float32Array;
@@ -31,6 +35,7 @@ pub use v8::Uint32Array;
 pub use v8::ffi::ExceptionType;
 pub use wrappable::FromJS;
 pub use wrappable::ToJS;
+pub use wrappable::Traced;
 
 #[cxx::bridge(namespace = "workerd::rust::jsg")]
 mod ffi {
@@ -713,14 +718,15 @@ pub enum Member {
     },
 }
 
-/// Trait for types that participate in V8 garbage collection tracing.
+/// Trait for types that participate in V8 garbage collection as tracked resources.
 ///
-/// Implementors can report nested GC-visible references via [`GcVisitor`] and
-/// optionally provide a class name for heap snapshot tooling.
-pub trait GarbageCollected {
-    /// Trace nested GC-visible references. Called during V8 GC marking.
-    fn trace(&self, _visitor: &mut GcVisitor);
-
+/// Extends [`Traced`] (which provides the `trace` method for visiting nested
+/// GC-visible references) with a class name for heap snapshot tooling.
+///
+/// `#[jsg_resource]` auto-derives both `Traced` and `GarbageCollected`.
+/// Use `#[jsg_resource(custom_trace)]` to suppress the generated `Traced`
+/// impl and provide your own.
+pub trait GarbageCollected: Traced {
     /// Class name for heap snapshots / debugging.
     ///
     /// Returns a `&'static CStr` — always a compile-time literal. This lets the C++ side

@@ -96,34 +96,27 @@ void Container::start(jsg::Lock& js, jsg::Optional<StartupOptions> maybeOptions)
     }
   }
 
-  if (!flags.getWorkerdExperimental()) {
-    JSG_REQUIRE(options.directorySnapshots == kj::none, Error,
-        "Container snapshot restore requires the 'experimental' compatibility flag.");
-    JSG_REQUIRE(options.containerSnapshot == kj::none, Error,
-        "Container full snapshot restore requires the 'experimental' compatibility flag.");
-  } else {
-    KJ_IF_SOME(directorySnapshots, options.directorySnapshots) {
-      auto list = req.initDirectorySnapshots(directorySnapshots.size());
-      for (auto i: kj::indices(directorySnapshots)) {
-        auto entry = list[i];
-        auto& restore = directorySnapshots[i];
-        auto& snap = restore.snapshot;
-        auto effectiveRestorePath = snap.dir.asPtr();
-        KJ_IF_SOME(mp, restore.mountPoint) {
-          effectiveRestorePath = mp.asPtr();
-        }
-
-        JSG_REQUIRE_NONNULL(parseRestorePath(effectiveRestorePath), Error,
-            "Directory snapshot cannot be restored to root directory.");
-
-        entry.setSnapshotId(snap.id);
-        entry.setRestorePath(effectiveRestorePath);
+  KJ_IF_SOME(directorySnapshots, options.directorySnapshots) {
+    auto list = req.initDirectorySnapshots(directorySnapshots.size());
+    for (auto i: kj::indices(directorySnapshots)) {
+      auto entry = list[i];
+      auto& restore = directorySnapshots[i];
+      auto& snap = restore.snapshot;
+      auto effectiveRestorePath = snap.dir.asPtr();
+      KJ_IF_SOME(mp, restore.mountPoint) {
+        effectiveRestorePath = mp.asPtr();
       }
-    }
 
-    KJ_IF_SOME(containerSnapshot, options.containerSnapshot) {
-      req.setContainerSnapshotId(containerSnapshot.id);
+      JSG_REQUIRE_NONNULL(parseRestorePath(effectiveRestorePath), Error,
+          "Directory snapshot cannot be restored to root directory.");
+
+      entry.setSnapshotId(snap.id);
+      entry.setRestorePath(effectiveRestorePath);
     }
+  }
+
+  KJ_IF_SOME(containerSnapshot, options.containerSnapshot) {
+    req.setContainerSnapshotId(containerSnapshot.id);
   }
 
   req.setCompatibilityFlags(flags);

@@ -227,7 +227,8 @@ class EsModule final: public Module {
     }
 
     KJ_IF_SOME(result, maybeEvaluate(js, *this, module, observer)) {
-      return js.wrapSimplePromise(kj::mv(result));
+      v8::Local<v8::Value> val = result;
+      return val;
     }
 
     return actuallyEvaluate(js, module, observer);
@@ -311,7 +312,8 @@ class SyntheticModule final: public Module {
     // is specified, then we defer evaluation to the given callback.
     if (isEval()) {
       KJ_IF_SOME(result, maybeEvaluate(js, *this, module, observer)) {
-        return js.wrapSimplePromise(kj::mv(result));
+        v8::Local<v8::Value> val = result;
+        return val;
       }
     }
     return module->Evaluate(js.v8Context());
@@ -695,7 +697,7 @@ class IsolateModuleRegistry final {
           }
         }
       } else {
-        KJ_ASSERT(promise->State() != v8::Promise::kPending,
+        KJ_ASSERT(!module->IsGraphAsync() && promise->State() != v8::Promise::kPending,
             "Top-level await is not supported in this context, so the module promise "
             "should never be pending");
         if (promise->State() == v8::Promise::kRejected) {
@@ -1669,7 +1671,7 @@ ModuleRegistry::ModuleRegistry(ModuleRegistry::Builder* builder)
       maybeEvalCallback(kj::mv(builder->maybeEvalCallback)),
       schemaLoader(kj::mv(builder->schemaLoader)) {}
 
-kj::Maybe<jsg::Promise<Value>> ModuleRegistry::evaluateImpl(jsg::Lock& js,
+kj::Maybe<jsg::JsPromise> ModuleRegistry::evaluateImpl(jsg::Lock& js,
     const Module& module,
     v8::Local<v8::Module> v8Module,
     const CompilationObserver& observer) const {
@@ -1862,7 +1864,7 @@ Module::Module(Url id, Type type, Flags flags, ContentType contentType)
       flags_(flags),
       contentType_(contentType) {}
 
-kj::Maybe<jsg::Promise<Value>> Module::Evaluator::operator()(jsg::Lock& js,
+kj::Maybe<jsg::JsPromise> Module::Evaluator::operator()(jsg::Lock& js,
     const Module& module,
     v8::Local<v8::Module> v8Module,
     const CompilationObserver& observer) const {

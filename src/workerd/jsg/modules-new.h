@@ -274,7 +274,7 @@ class Module {
   class Evaluator final {
    public:
     KJ_DISALLOW_COPY_AND_MOVE(Evaluator);
-    kj::Maybe<jsg::Promise<Value>> operator()(jsg::Lock& js,
+    kj::Maybe<jsg::JsPromise> operator()(jsg::Lock& js,
         const Module& module,
         v8::Local<v8::Module> v8Module,
         const CompilationObserver& observer) const;
@@ -666,7 +666,7 @@ class ModuleRegistry final: public kj::AtomicRefcounted, public ModuleRegistryBa
   // Flag::EVAL on a module is ignored. If the EvalCallback is set, then any
   // Modules that have the Flag::EVAL set will have their evaluation deferred
   // to this callback.
-  using EvalCallback = Function<jsg::Promise<Value>(
+  using EvalCallback = Function<jsg::JsPromise(
       const Module& module, v8::Local<v8::Module> v8Module, const CompilationObserver& observer)>;
 
   class Builder final {
@@ -791,7 +791,7 @@ class ModuleRegistry final: public kj::AtomicRefcounted, public ModuleRegistryBa
       ModuleBundle& bundle,
       const Url& bundleBase) KJ_WARN_UNUSED_RESULT;
 
-  kj::Maybe<jsg::Promise<Value>> evaluateImpl(jsg::Lock& js,
+  kj::Maybe<jsg::JsPromise> evaluateImpl(jsg::Lock& js,
       const Module& module,
       v8::Local<v8::Module> v8Module,
       const CompilationObserver& observer) const;
