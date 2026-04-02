@@ -83,9 +83,9 @@ namespace workerd::jsg {
   do {                                                                                             \
     try {                                                                                          \
       KJ_REQUIRE(cond, jsErrorType ": Cloudflare internal error.");                                \
-    } catch (const kj::Exception& e) {                                                             \
+    } catch (kj::Exception & e) {                                                                  \
       KJ_LOG(ERROR, e, ##__VA_ARGS__);                                                             \
-      throw e;                                                                                     \
+      throw kj::mv(e);                                                                             \
     }                                                                                              \
   } while (0)
 
@@ -93,9 +93,9 @@ namespace workerd::jsg {
   ([&]() -> decltype(auto) {                                                                       \
     try {                                                                                          \
       return KJ_REQUIRE_NONNULL(value, jsErrorType ": Cloudflare internal error.");                \
-    } catch (const kj::Exception& e) {                                                             \
+    } catch (kj::Exception & e) {                                                                  \
       KJ_LOG(ERROR, e, ##__VA_ARGS__);                                                             \
-      throw e;                                                                                     \
+      throw kj::mv(e);                                                                             \
     }                                                                                              \
   }())
 
@@ -103,9 +103,9 @@ namespace workerd::jsg {
   do {                                                                                             \
     try {                                                                                          \
       KJ_FAIL_REQUIRE(jsErrorType ": Cloudflare internal error.");                                 \
-    } catch (const kj::Exception& e) {                                                             \
+    } catch (kj::Exception & e) {                                                                  \
       KJ_LOG(ERROR, e, ##__VA_ARGS__);                                                             \
-      throw e;                                                                                     \
+      throw kj::mv(e);                                                                             \
     }                                                                                              \
   } while (0)
 

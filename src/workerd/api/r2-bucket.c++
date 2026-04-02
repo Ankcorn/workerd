@@ -1421,7 +1421,7 @@ jsg::Promise<jsg::Ref<Blob>> R2Bucket::GetResult::blob(jsg::Lock& js) {
     // httpMetadata can't be null because GetResult always populates it.
     kj::String contentType =
         mapCopyString(KJ_REQUIRE_NONNULL(httpMetadata).contentType).orDefault(nullptr);
-    return js.alloc<Blob>(js, kj::mv(buffer), kj::mv(contentType));
+    return js.alloc<Blob>(js, buffer.getJsHandle(js), kj::mv(contentType));
   });
 }
 

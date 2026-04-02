@@ -754,6 +754,9 @@ kj::ArrayPtr<kj::byte> JsBufferSource::asArrayPtr() {
       return nullptr;
     }
     return kj::ArrayPtr(static_cast<kj::byte*>(buf->Data()), buf->ByteLength());
+  } else if (inner->IsSharedArrayBuffer()) {
+    auto buf = inner.As<v8::SharedArrayBuffer>();
+    return kj::ArrayPtr(static_cast<kj::byte*>(buf->Data()), buf->ByteLength());
   } else {
     KJ_DASSERT(inner->IsArrayBufferView());
     auto view = inner.As<v8::ArrayBufferView>();
@@ -774,6 +777,9 @@ size_t JsBufferSource::size() const {
       return 0;
     }
     return buf->ByteLength();
+  } else if (inner->IsSharedArrayBuffer()) {
+    auto buf = inner.As<v8::SharedArrayBuffer>();
+    return buf->ByteLength();
   } else {
     KJ_DASSERT(inner->IsArrayBufferView());
     auto view = inner.As<v8::ArrayBufferView>();
@@ -786,9 +792,15 @@ size_t JsBufferSource::size() const {
 
 bool JsBufferSource::isIntegerType() const {
   v8::Local<v8::Value> inner = *this;
-  return inner->IsUint8Array() || inner->IsUint8ClampedArray() || inner->IsInt8Array() ||
-      inner->IsUint16Array() || inner->IsInt16Array() || inner->IsUint32Array() ||
-      inner->IsInt32Array() || inner->IsBigInt64Array() || inner->IsBigUint64Array();
+  return inner->IsArrayBuffer() || inner->IsSharedArrayBuffer() || inner->IsUint8Array() ||
+      inner->IsUint8ClampedArray() || inner->IsInt8Array() || inner->IsUint16Array() ||
+      inner->IsInt16Array() || inner->IsUint32Array() || inner->IsInt32Array() ||
+      inner->IsBigInt64Array() || inner->IsBigUint64Array();
+}
+
+bool JsBufferSource::isSharedArrayBuffer() const {
+  v8::Local<v8::Value> inner = *this;
+  return inner->IsSharedArrayBuffer();
 }
 
 bool JsBufferSource::isArrayBuffer() const {
@@ -804,6 +816,16 @@ bool JsBufferSource::isArrayBufferView() const {
 kj::Array<kj::byte> JsBufferSource::copy() {
   auto ptr = asArrayPtr();
   return kj::heapArray(ptr);
+}
+
+bool JsBufferSource::isResizable() const {
+  v8::Local<v8::Value> inner = *this;
+  if (inner->IsArrayBuffer()) {
+    return inner.As<v8::ArrayBuffer>()->IsResizableByUserJavaScript();
+  } else if (inner->IsArrayBufferView()) {
+    return inner.As<v8::ArrayBufferView>()->Buffer()->IsResizableByUserJavaScript();
+  }
+  return false;
 }
 
 // ======================================================================================
