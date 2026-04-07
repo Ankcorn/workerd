@@ -19,8 +19,8 @@ class ExecOutput: public jsg::Object {
  public:
   ExecOutput(kj::Array<kj::byte> stdoutBytes, kj::Array<kj::byte> stderrBytes, int exitCode);
 
-  jsg::BufferSource getStdout(jsg::Lock& js);
-  jsg::BufferSource getStderr(jsg::Lock& js);
+  jsg::JsArrayBuffer getStdout(jsg::Lock& js);
+  jsg::JsArrayBuffer getStderr(jsg::Lock& js);
   int getExitCode() const {
     return exitCode;
   }
@@ -242,6 +242,8 @@ class Container: public jsg::Object {
   jsg::Promise<void> interceptAllOutboundHttp(jsg::Lock& js, jsg::Ref<Fetcher> binding);
   jsg::Promise<void> interceptOutboundHttps(
       jsg::Lock& js, kj::String addr, jsg::Ref<Fetcher> binding);
+  jsg::Promise<void> interceptOutboundTcp(
+      jsg::Lock& js, kj::String addr, jsg::Ref<Fetcher> binding);
   jsg::Promise<DirectorySnapshot> snapshotDirectory(
       jsg::Lock& js, DirectorySnapshotOptions options);
   jsg::Promise<Snapshot> snapshotContainer(jsg::Lock& js, SnapshotOptions options);
@@ -266,6 +268,7 @@ class Container: public jsg::Object {
     JSG_METHOD(interceptOutboundHttps);
     if (flags.getWorkerdExperimental()) {
       JSG_METHOD(exec);
+      JSG_METHOD(interceptOutboundTcp);
     }
   }
 

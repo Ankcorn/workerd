@@ -77,6 +77,9 @@ Body::Buffer Body::Buffer::clone(jsg::Lock& js) {
   Buffer result;
   result.view = view;
   KJ_SWITCH_ONEOF(ownBytes) {
+    KJ_CASE_ONEOF(ref, jsg::JsRef<jsg::JsBufferSource>) {
+      result.ownBytes = ref.addRef(js);
+    }
     KJ_CASE_ONEOF(refcounted, kj::Own<RefcountedBytes>) {
       result.ownBytes = kj::addRef(*refcounted);
     }
@@ -113,13 +116,25 @@ Body::ExtractedBody Body::extractBody(jsg::Lock& js, Initializer init) {
       contentType = kj::str(MimeType::PLAINTEXT_STRING);
       buffer = kj::mv(text);
     }
-    KJ_CASE_ONEOF(bytes, kj::Array<byte>) {
-      // NOTE: The spec would have us create a copy of the input buffer here, but that would be a
-      //   sad waste of CPU and memory. This is technically a non-conformity that would allow a user
-      //   to construct a Body from a BufferSource and then later modify the BufferSource. However,
-      //   redirects cause body streams to be reconstructed from the original, possibly mutated,
-      //   buffer anyway, so this is unlikely to be a problem in practice.
-      buffer = kj::mv(bytes);
+    KJ_CASE_ONEOF(bytesRef, jsg::JsRef<jsg::JsBufferSource>) {
+      auto bytes = bytesRef.getHandle(js);
+      if (bytes.isResizable()) {
+        // If the input buffer is resizable, it's safest to make a copy of it since otherwise
+        // the original buffer could be resized after we snapshot the view, which requires
+        // additional book keeping while the body is alive to ensure the view remains valid.
+        // Making a copy is what the spec requires and keeps the implementation simpler, at
+        // the cost of extra CPU and memory usage.
+        auto buf = kj::heapArray<kj::byte>(bytes.size());
+        buf.asPtr().copyFrom(bytes.asArrayPtr());
+        buffer = kj::mv(buf);
+      } else {
+        // NOTE: The spec would have us create a copy of the input buffer here, but that would be
+        // a sad waste of CPU and memory. This is technically a non-conformity that would allow a
+        // user to construct a Body from a BufferSource and then later modify the BufferSource.
+        // However, redirects cause body streams to be reconstructed from the original, possibly
+        // mutated, buffer anyway, so this is unlikely to be a problem in practice.
+        buffer = Buffer(js, bytes);
+      }
     }
     KJ_CASE_ONEOF(blob, jsg::Ref<Blob>) {
       // Blobs always have a type, but it defaults to an empty string. We should NOT set
@@ -2017,7 +2032,8 @@ jsg::Promise<jsg::Ref<Response>> fetchImplNoOutputLock(jsg::Lock& js,
 
     KJ_IF_SOME(dataUrl, DataUrl::tryParse(jsRequest->getUrl())) {
       // If the URL is a data URL, we need to handle it specially.
-      kj::Maybe<kj::Array<kj::byte>> maybeResponseBody;
+      kj::Maybe<jsg::Ref<ReadableStream>> maybeResponseBody;
+      auto type = dataUrl.getMimeType().toString();
 
       // The Fetch spec defines responses to HEAD or CONNECT requests, or responses with null body
       // statuses, as having null bodies.
@@ -2026,11 +2042,13 @@ jsg::Promise<jsg::Ref<Response>> fetchImplNoOutputLock(jsg::Lock& js,
       // Note that we don't handle the CONNECT case here because kj-http handles CONNECT specially,
       // and the Fetch spec doesn't allow users to create Requests with CONNECT methods.
       if (jsRequest->getMethodEnum() == kj::HttpMethod::GET) {
-        maybeResponseBody.emplace(dataUrl.releaseData());
+        auto view = dataUrl.getData();
+        auto rs = streams::newMemorySource(view, kj::heap(kj::mv(dataUrl)));
+        maybeResponseBody.emplace(js.alloc<ReadableStream>(IoContext::current(), kj::mv(rs)));
       }
 
       auto headers = js.alloc<Headers>();
-      headers->setCommon(capnp::CommonHeaderName::CONTENT_TYPE, dataUrl.getMimeType().toString());
+      headers->setCommon(capnp::CommonHeaderName::CONTENT_TYPE, kj::mv(type));
       return js.resolvedPromise(Response::constructor(js, kj::mv(maybeResponseBody),
           Response::InitializerDict{
             .status = 200,

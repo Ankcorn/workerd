@@ -45,7 +45,7 @@ class Body: public jsg::Object {
   // the POST will successfully retransmit.
   using Initializer = kj::OneOf<jsg::Ref<ReadableStream>,
       kj::String,
-      kj::Array<byte>,
+      jsg::JsRef<jsg::JsBufferSource>,
       jsg::Ref<Blob>,
       jsg::Ref<FormData>,
       jsg::Ref<URLSearchParams>,
@@ -73,7 +73,7 @@ class Body: public jsg::Object {
     //
     // NOTE: ownBytes may contain a v8::Global reference, hence instances of `Buffer` must exist
     //   only within the V8 heap space.
-    kj::OneOf<kj::Own<RefcountedBytes>, jsg::Ref<Blob>> ownBytes;
+    kj::OneOf<kj::Own<RefcountedBytes>, jsg::Ref<Blob>, jsg::JsRef<jsg::JsBufferSource>> ownBytes;
     // TODO(cleanup): When we integrate with V8's garbage collection APIs, we need to account for
     //   that here.
 
@@ -84,6 +84,13 @@ class Body: public jsg::Object {
     kj::ArrayPtr<const kj::byte> view;
 
     Buffer() = default;
+    Buffer(jsg::Lock& js, jsg::JsBufferSource& source)
+        : ownBytes(source.addRef(js)),
+          view(source.asArrayPtr()) {
+      // If the BufferSource is resizable, then it should have been copied into
+      // a kj::Array and passed in to that constructor.
+      KJ_ASSERT(!source.isResizable());
+    }
     Buffer(kj::Array<kj::byte> array)
         : ownBytes(kj::refcounted<RefcountedBytes>(kj::mv(array))),
           view(ownBytes.get<kj::Own<RefcountedBytes>>()->bytes) {}
@@ -101,6 +108,9 @@ class Body: public jsg::Object {
 
     JSG_MEMORY_INFO(Buffer) {
       KJ_SWITCH_ONEOF(ownBytes) {
+        KJ_CASE_ONEOF(ref, jsg::JsRef<jsg::JsBufferSource>) {
+          tracker.trackField("ref", ref);
+        }
         KJ_CASE_ONEOF(bytes, kj::Own<RefcountedBytes>) {
           tracker.trackField("bytes", bytes);
         }

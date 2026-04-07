@@ -806,6 +806,11 @@ class IsolateModuleRegistry final {
   // Resolves the module from the inner ModuleRegistry, caching the results.
   kj::Maybe<Entry&> resolveWithCaching(
       Lock& js, const ResolveContext& context) KJ_WARN_UNUSED_RESULT {
+    // Clone attributes so the fallback bundle callback can see them.
+    kj::HashMap<kj::StringPtr, kj::StringPtr> clonedAttrs;
+    for (const auto& [key, value]: context.attributes) {
+      clonedAttrs.insert(key, value);
+    }
     ResolveContext innerContext{
       // The type identifies the resolution context as a bundle, builtin, or builtin-only.
       .type = context.type,
@@ -817,6 +822,10 @@ class IsolateModuleRegistry final {
           Url::EquivalenceOption::IGNORE_FRAGMENTS | Url::EquivalenceOption::IGNORE_SEARCH),
       // The referrer is passed along for informational purposes only.
       .referrerNormalizedSpecifier = context.referrerNormalizedSpecifier,
+      // The raw specifier and attributes are passed along for informational purposes
+      // (used by the fallback service protocol).
+      .rawSpecifier = context.rawSpecifier,
+      .attributes = kj::mv(clonedAttrs),
     };
 
     KJ_IF_SOME(found, inner.lookup(innerContext)) {

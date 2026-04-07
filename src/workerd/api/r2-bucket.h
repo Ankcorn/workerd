@@ -132,11 +132,11 @@ class R2Bucket: public jsg::Object {
           sha384(kj::mv(sha384)),
           sha512(kj::mv(sha512)) {}
 
-    jsg::Optional<jsg::BufferSource> getMd5(jsg::Lock& js);
-    jsg::Optional<jsg::BufferSource> getSha1(jsg::Lock& js);
-    jsg::Optional<jsg::BufferSource> getSha256(jsg::Lock& js);
-    jsg::Optional<jsg::BufferSource> getSha384(jsg::Lock& js);
-    jsg::Optional<jsg::BufferSource> getSha512(jsg::Lock& js);
+    jsg::Optional<jsg::JsArrayBuffer> getMd5(jsg::Lock& js);
+    jsg::Optional<jsg::JsArrayBuffer> getSha1(jsg::Lock& js);
+    jsg::Optional<jsg::JsArrayBuffer> getSha256(jsg::Lock& js);
+    jsg::Optional<jsg::JsArrayBuffer> getSha384(jsg::Lock& js);
+    jsg::Optional<jsg::JsArrayBuffer> getSha512(jsg::Lock& js);
 
     StringChecksums toJSON();
 
@@ -204,11 +204,11 @@ class R2Bucket: public jsg::Object {
     jsg::Optional<kj::OneOf<Conditional, jsg::Ref<Headers>>> onlyIf;
     jsg::Optional<kj::OneOf<HttpMetadata, jsg::Ref<Headers>>> httpMetadata;
     jsg::Optional<jsg::Dict<kj::String>> customMetadata;
-    jsg::Optional<kj::OneOf<jsg::BufferSource, jsg::NonCoercible<kj::String>>> md5;
-    jsg::Optional<kj::OneOf<jsg::BufferSource, jsg::NonCoercible<kj::String>>> sha1;
-    jsg::Optional<kj::OneOf<jsg::BufferSource, jsg::NonCoercible<kj::String>>> sha256;
-    jsg::Optional<kj::OneOf<jsg::BufferSource, jsg::NonCoercible<kj::String>>> sha384;
-    jsg::Optional<kj::OneOf<jsg::BufferSource, jsg::NonCoercible<kj::String>>> sha512;
+    jsg::Optional<kj::OneOf<jsg::JsRef<jsg::JsBufferSource>, jsg::NonCoercible<kj::String>>> md5;
+    jsg::Optional<kj::OneOf<jsg::JsRef<jsg::JsBufferSource>, jsg::NonCoercible<kj::String>>> sha1;
+    jsg::Optional<kj::OneOf<jsg::JsRef<jsg::JsBufferSource>, jsg::NonCoercible<kj::String>>> sha256;
+    jsg::Optional<kj::OneOf<jsg::JsRef<jsg::JsBufferSource>, jsg::NonCoercible<kj::String>>> sha384;
+    jsg::Optional<kj::OneOf<jsg::JsRef<jsg::JsBufferSource>, jsg::NonCoercible<kj::String>>> sha512;
     jsg::Optional<kj::String> storageClass;
     jsg::Optional<kj::OneOf<kj::Array<byte>, kj::String>> ssecKey;
 

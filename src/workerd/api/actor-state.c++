@@ -1133,6 +1133,7 @@ void DurableObjectState::abort(jsg::Lock& js, jsg::Optional<kj::String> reason) 
   });
 
   kj::Exception error(kj::Exception::Type::FAILED, __FILE__, __LINE__, kj::mv(description));
+  error.setDetail(jsg::EXCEPTION_IS_USER_ERROR, kj::heapArray<byte>(0));
 
   KJ_IF_SOME(s, storage) {
     // Make sure we _synchronously_ break storage so that there's no chance our promise fulfilling

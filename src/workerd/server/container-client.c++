@@ -903,13 +903,13 @@ kj::Maybe<uint16_t> tryParsePublishedHostPort(capnp::json::Value::Reader portMap
 }  // namespace
 
 // Represents a parsed egress mapping. IP/CIDR mappings match destination IPs,
-// while hostnameGlob mappings match either HTTP hostnames or TLS SNI depending on `tls`.
+// while hostnameGlob mappings match either HTTP hostnames or TLS SNI depending on protocol.
 // Defined here (not in the header) to avoid pulling kj::OneOf, kj::CidrRange, and
 // kj::Vector into server.c++ which includes container-client.h.
 struct ContainerClient::EgressMapping {
   kj::OneOf<kj::CidrRange, kj::String> destination;
   uint16_t port;  // 0 means match all ports
-  bool tls;
+  EgressProtocol protocol;
   kj::Own<workerd::IoChannelFactory::SubrequestChannel> channel;
 };
 
@@ -1130,6 +1130,24 @@ class ContainerClient::DockerProcessHandle final: public rpc::Container::Process
   kj::Maybe<kj::ForkedPromise<void>> streamClosedTask;
 };
 
+// ConnectResponse adapter for TCP egress. Since we've already accepted the sidecar's HTTP
+// CONNECT before calling worker->connect(), this adapter simply records the worker's
+// accept/reject decision without sending anything on the wire.
+class TcpEgressConnectResponse final: public kj::HttpService::ConnectResponse {
+ public:
+  void accept(uint statusCode, kj::StringPtr statusText, const kj::HttpHeaders& headers) override {
+    // Worker accepted the connection. Nothing additional to do since we already
+    // accepted the sidecar CONNECT.
+  }
+
+  kj::Own<kj::AsyncOutputStream> reject(uint statusCode,
+      kj::StringPtr statusText,
+      const kj::HttpHeaders& headers,
+      kj::Maybe<uint64_t> expectedBodySize = kj::none) override {
+    KJ_FAIL_REQUIRE("TCP egress worker rejected the connection: ", statusCode, " ", statusText);
+  }
+};
+
 // HTTP service that handles HTTP CONNECT requests from the container sidecar (proxy-everything).
 // When the sidecar intercepts container egress traffic, it sends HTTP CONNECT to this service.
 // After accepting the CONNECT, the tunnel carries the actual HTTP request from the container,
@@ -1213,12 +1231,18 @@ class EgressHttpService final: public kj::HttpService {
       kj::HttpConnectSettings settings) override {
     auto destAddr = kj::str(host);
     if (co_await handleConnectMode(destAddr, headers, connection, response, "X-Tls-Sni",
-            /*defaultPort=*/443, /*tls=*/true)) {
+            /*defaultPort=*/443, EgressProtocol::HTTPS)) {
       co_return;
     }
 
     if (co_await handleConnectMode(destAddr, headers, connection, response, "X-Hostname",
-            /*defaultPort=*/80, /*tls=*/false)) {
+            /*defaultPort=*/80, EgressProtocol::HTTP)) {
+      co_return;
+    }
+
+    // Try raw TCP mapping before falling through to passthrough. TCP mappings match
+    // on IP/CIDR + port without any application-layer hostname information.
+    if (co_await handleTcpConnect(destAddr, connection, response)) {
       co_return;
     }
 
@@ -1238,7 +1262,7 @@ class EgressHttpService final: public kj::HttpService {
       ConnectResponse& response,
       kj::StringPtr hostnameHeader,
       uint16_t defaultPort,
-      bool tls) {
+      EgressProtocol protocol) {
     kj::Maybe<kj::String> requestHostname;
     KJ_IF_SOME(value, getHeader(headers, hostnameHeader)) {
       requestHostname = kj::str(value);
@@ -1248,7 +1272,7 @@ class EgressHttpService final: public kj::HttpService {
         requestHostname.map([](auto& hostname) {
       return kj::Maybe<kj::StringPtr>(hostname);
     }).orDefault(kj::none),
-        tls);
+        protocol);
 
     if (requestHostname == kj::none && mapping == kj::none) {
       co_return false;
@@ -1258,18 +1282,19 @@ class EgressHttpService final: public kj::HttpService {
       kj::HttpHeaders responseHeaders(headerTable);
       response.accept(200, "OK", responseHeaders);
 
+      bool isTls = (protocol == EgressProtocol::HTTPS);
       auto innerService = kj::heap<InnerEgressService>(
           [&client = containerClient, addr = kj::str(destAddr),
               hostname = requestHostname.map([](auto& value) { return kj::str(value); }),
               defaultPort,
-              tls]() mutable -> kj::Maybe<kj::Own<IoChannelFactory::SubrequestChannel>> {
+              protocol]() mutable -> kj::Maybe<kj::Own<IoChannelFactory::SubrequestChannel>> {
         return client.findEgressMapping(addr, defaultPort,
             hostname.map([](auto& value) {
           return kj::Maybe<kj::StringPtr>(value);
         }).orDefault(kj::none),
-            tls);
+            protocol);
       },
-          destAddr, tls);
+          destAddr, isTls);
       auto innerServer =
           kj::heap<kj::HttpServer>(containerClient.timer, headerTable, *innerService);
 
@@ -1281,6 +1306,40 @@ class EgressHttpService final: public kj::HttpService {
     response.accept(202, "Accepted", responseHeaders);
 
     co_await passThroughConnection(destAddr, connection);
+    co_return true;
+  }
+
+  // Handles raw TCP egress by forwarding the sidecar tunnel to the worker's connect() handler.
+  // Returns true if a TCP mapping matched and the connection was handled.
+  kj::Promise<bool> handleTcpConnect(
+      kj::StringPtr destAddr, kj::AsyncIoStream& connection, ConnectResponse& response) {
+    // For TCP, we match on IP:port only — no hostname matching since raw TCP
+    // doesn't carry application-layer hostname information.
+    auto mapping = containerClient.findEgressMapping(
+        destAddr, /*defaultPort=*/0, /*hostname=*/kj::none, EgressProtocol::TCP);
+
+    if (mapping == kj::none) {
+      co_return false;
+    }
+
+    auto& channel = KJ_ASSERT_NONNULL(mapping);
+
+    kj::HttpHeaders responseHeaders(headerTable);
+    // 202 tells proxy-everything to send bytes as-is without attempting to
+    // interpret the stream (e.g. if the underlying TCP carries TLS).
+    response.accept(202, "Accepted", responseHeaders);
+
+    IoChannelFactory::SubrequestMetadata metadata;
+    auto worker = channel->startRequest(kj::mv(metadata));
+
+    // Bridge the sidecar tunnel to the worker's connect() handler. The worker entrypoint
+    // is expected to implement connect() (e.g., a WorkerEntrypoint that proxies TCP).
+    // We provide a simple ConnectResponse adapter since we've already accepted the
+    // sidecar's CONNECT above.
+    TcpEgressConnectResponse tcpResponse;
+    kj::HttpHeaders connectHeaders(headerTable);
+    co_await worker->connect(destAddr, connectHeaders, connection, tcpResponse, {});
+
     co_return true;
   }
 
@@ -2184,7 +2243,7 @@ kj::Promise<void> ContainerClient::start(StartContext context) {
   co_await createContainer(effectiveImage, entrypoint, environment, restoreMounts.asPtr(), params);
 
   for (auto& mapping: egressState->mappings) {
-    if (mapping.tls) {
+    if (mapping.protocol == EgressProtocol::HTTPS) {
       co_await injectCACert();
       break;
     }
@@ -2429,9 +2488,9 @@ kj::Promise<void> ContainerClient::listenTcp(ListenTcpContext context) {
 
 void ContainerClient::upsertEgressMapping(EgressMapping mapping) {
   for (auto& m: egressState->mappings) {
-    // If the mapping differs in port or needing TLS, we skip it as it's
+    // If the mapping differs in port or protocol, we skip it as it's
     // not the same.
-    if (m.port != mapping.port || m.tls != mapping.tls) {
+    if (m.port != mapping.port || m.protocol != mapping.protocol) {
       continue;
     }
 
@@ -2490,7 +2549,10 @@ kj::Vector<kj::String> ContainerClient::getDnsAllowHostnames() const {
 }
 
 kj::Maybe<kj::Own<workerd::IoChannelFactory::SubrequestChannel>> ContainerClient::findEgressMapping(
-    kj::StringPtr destAddr, uint16_t defaultPort, kj::Maybe<kj::StringPtr> hostname, bool tls) {
+    kj::StringPtr destAddr,
+    uint16_t defaultPort,
+    kj::Maybe<kj::StringPtr> hostname,
+    EgressProtocol protocol) {
   auto hostAndPort = stripPort(destAddr);
   uint16_t port = hostAndPort.port.orDefault(defaultPort);
   kj::Maybe<kj::String> normalizedHostname;
@@ -2499,10 +2561,10 @@ kj::Maybe<kj::Own<workerd::IoChannelFactory::SubrequestChannel>> ContainerClient
   }
 
   for (auto& mapping: egressState->mappings) {
-    // Mappings can differ in port, whether to do tls and the cidr/hostname.
+    // Mappings can differ in port, protocol and the cidr/hostname.
     // Users can specify things like google.com:7070, or 0.0.0.0:7070. On top of that,
-    // they might want TLS interception.
-    if (mapping.tls != tls) {
+    // they might want TLS interception (HTTPS) or raw TCP forwarding.
+    if (mapping.protocol != protocol) {
       continue;
     }
 
@@ -2611,7 +2673,7 @@ kj::Promise<void> ContainerClient::setEgressHttp(SetEgressHttpContext context) {
   upsertEgressMapping(EgressMapping{
     .destination = kj::mv(parsed.destination),
     .port = port,
-    .tls = false,
+    .protocol = EgressProtocol::HTTP,
     .channel = kj::mv(subrequestChannel),
   });
 
@@ -2646,7 +2708,43 @@ kj::Promise<void> ContainerClient::setEgressHttps(SetEgressHttpsContext context)
   upsertEgressMapping(EgressMapping{
     .destination = kj::mv(parsed.destination),
     .port = port,
-    .tls = true,
+    .protocol = EgressProtocol::HTTPS,
+    .channel = kj::mv(subrequestChannel),
+  });
+
+  KJ_IF_SOME(ingressHostPort, sidecarIngressHostPort) {
+    co_await updateSidecarEgressConfig(ingressHostPort, egressListenerPort);
+  }
+
+  co_return;
+}
+
+kj::Promise<void> ContainerClient::setEgressTcp(SetEgressTcpContext context) {
+  auto [ready, done] = getRpcTurn();
+  co_await ready;
+  KJ_DEFER(done->fulfill());
+
+  auto params = context.getParams();
+  auto hostPortStr = kj::str(params.getHostPort());
+  auto tokenBytes = params.getChannelToken();
+
+  auto parsed = parseHostPort(hostPortStr);
+  // For TCP, default to port 0 (match all ports) when no port is specified.
+  uint16_t port = parsed.port.orDefault(0);
+
+  co_await ensureEgressListenerStarted();
+
+  if (containerStarted.load(std::memory_order_acquire)) {
+    co_await ensureSidecarStarted();
+  }
+
+  auto subrequestChannel = channelTokenHandler.decodeSubrequestChannelToken(
+      workerd::IoChannelFactory::ChannelTokenUsage::RPC, tokenBytes);
+
+  upsertEgressMapping(EgressMapping{
+    .destination = kj::mv(parsed.destination),
+    .port = port,
+    .protocol = EgressProtocol::TCP,
     .channel = kj::mv(subrequestChannel),
   });
 

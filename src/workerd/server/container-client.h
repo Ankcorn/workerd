@@ -25,6 +25,13 @@
 
 namespace workerd::server {
 
+// Distinguishes how an egress mapping should proxy matched connections.
+enum class EgressProtocol : uint8_t {
+  HTTP,   // Parse HTTP inside the CONNECT tunnel and forward via worker request().
+  HTTPS,  // Same as HTTP but with TLS interception (CA-cert injected).
+  TCP,    // Forward raw bytes via worker connect().
+};
+
 // Decode a JSON string into a Cap'n Proto message of type T. The MallocMessageBuilder is
 // heap-allocated and returned as an owned pointer so that the decoded data outlives this
 // call. Callers must keep the returned message alive while accessing the root via
@@ -77,6 +84,7 @@ class ContainerClient final: public rpc::Container::Server, public kj::Refcounte
   kj::Promise<void> setInactivityTimeout(SetInactivityTimeoutContext context) override;
   kj::Promise<void> setEgressHttp(SetEgressHttpContext context) override;
   kj::Promise<void> setEgressHttps(SetEgressHttpsContext context) override;
+  kj::Promise<void> setEgressTcp(SetEgressTcpContext context) override;
   kj::Promise<void> snapshotDirectory(SnapshotDirectoryContext context) override;
   kj::Promise<void> snapshotContainer(SnapshotContainerContext context) override;
 
@@ -211,7 +219,10 @@ class ContainerClient final: public rpc::Container::Server, public kj::Refcounte
   // Find a matching egress mapping for the given destination address (host:port format).
   // Returns an addRef'd Own so the channel stays alive even if the mapping is later replaced.
   kj::Maybe<kj::Own<workerd::IoChannelFactory::SubrequestChannel>> findEgressMapping(
-      kj::StringPtr destAddr, uint16_t defaultPort, kj::Maybe<kj::StringPtr> hostname, bool tls);
+      kj::StringPtr destAddr,
+      uint16_t defaultPort,
+      kj::Maybe<kj::StringPtr> hostname,
+      EgressProtocol protocol);
 
   kj::Promise<void> writeFileToContainer(kj::StringPtr container,
       kj::StringPtr dir,

@@ -1041,16 +1041,31 @@ kj::Arc<jsg::modules::ModuleRegistry> WorkerdApi::newWorkerdModuleRegistry(
     KJ_IF_SOME(fallbackService, maybeFallbackService) {
       auto fallbackClient =
           kj::heap<workerd::fallback::FallbackServiceClient>(kj::str(fallbackService));
+
+      // Map from the module resolution source to the fallback service import type.
+      constexpr auto sourceToImportType = [](jsg::modules::ResolveContext::Source source) {
+        switch (source) {
+          case jsg::modules::ResolveContext::Source::STATIC_IMPORT:
+          case jsg::modules::ResolveContext::Source::DYNAMIC_IMPORT:
+            return workerd::fallback::ImportType::IMPORT;
+          case jsg::modules::ResolveContext::Source::REQUIRE:
+            return workerd::fallback::ImportType::REQUIRE;
+          case jsg::modules::ResolveContext::Source::INTERNAL:
+            return workerd::fallback::ImportType::INTERNAL;
+        }
+        KJ_UNREACHABLE;
+      };
+
       builder.add(jsg::modules::ModuleBundle::newFallbackBundle(
-          [client = kj::mv(fallbackClient), featureFlags](
+          [client = kj::mv(fallbackClient), featureFlags, sourceToImportType](
               const jsg::modules::ResolveContext& context) mutable
           -> kj::Maybe<kj::OneOf<kj::String, kj::Own<jsg::modules::Module>>> {
         auto normalizedSpecifier = kj::str(context.normalizedSpecifier.getHref());
         auto referrer = kj::str(context.referrerNormalizedSpecifier.getHref());
         KJ_IF_SOME(resolved,
-            client->tryResolve(workerd::fallback::Version::V2,
-                workerd::fallback::ImportType::IMPORT, normalizedSpecifier,
-                context.rawSpecifier.orDefault(nullptr), referrer, context.attributes)) {
+            client->tryResolve(workerd::fallback::Version::V2, sourceToImportType(context.source),
+                normalizedSpecifier, context.rawSpecifier.orDefault(nullptr), referrer,
+                context.attributes)) {
           KJ_SWITCH_ONEOF(resolved) {
             KJ_CASE_ONEOF(str, kj::String) {
               // The fallback service returned an alternative specifier.

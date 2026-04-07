@@ -306,10 +306,10 @@ class Module {
 
   // If isEval() returns true, then the module requires code evaluation to complete
   // outside of a request context (that is, it cannot perform certain I/O tasks).
-  inline bool isEval() const;
+  bool isEval() const;
 
   // If isWasm() returns true, then the module is a WebAssembly module.
-  inline bool isWasm() const;
+  bool isWasm() const;
 
   // Returns the content type of the module.
   inline ContentType contentType() const {

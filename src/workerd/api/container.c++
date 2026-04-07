@@ -34,12 +34,6 @@ kj::Maybe<kj::Path> parseRestorePath(kj::StringPtr path) {
   }
 }
 
-jsg::BufferSource copyBytes(jsg::Lock& js, kj::ArrayPtr<const kj::byte> bytes) {
-  auto backing = jsg::BackingStore::alloc<v8::ArrayBuffer>(js, bytes.size());
-  backing.asArrayPtr().copyFrom(bytes);
-  return jsg::BufferSource(js, kj::mv(backing));
-}
-
 void requireValidEnvNameAndValue(kj::StringPtr name, kj::StringPtr value) {
   JSG_REQUIRE(name.findFirst('=') == kj::none, Error,
       "Environment variable names cannot contain '=': ", name);
@@ -76,12 +70,12 @@ ExecOutput::ExecOutput(
       stderrBytes(kj::mv(stderrBytes)),
       exitCode(exitCode) {}
 
-jsg::BufferSource ExecOutput::getStdout(jsg::Lock& js) {
-  return copyBytes(js, stdoutBytes);
+jsg::JsArrayBuffer ExecOutput::getStdout(jsg::Lock& js) {
+  return jsg::JsArrayBuffer::create(js, stdoutBytes);
 }
 
-jsg::BufferSource ExecOutput::getStderr(jsg::Lock& js) {
-  return copyBytes(js, stderrBytes);
+jsg::JsArrayBuffer ExecOutput::getStderr(jsg::Lock& js) {
+  return jsg::JsArrayBuffer::create(js, stderrBytes);
 }
 
 ExecProcess::ExecProcess(jsg::Optional<jsg::Ref<WritableStream>> stdinStream,
@@ -534,6 +528,21 @@ jsg::Promise<jsg::Ref<ExecProcess>> Container::exec(
     return js.alloc<ExecProcess>(
         kj::mv(stdinStream), kj::mv(stdoutStream), kj::mv(stderrStream), pid, kj::mv(handle));
   });
+}
+
+jsg::Promise<void> Container::interceptOutboundTcp(
+    jsg::Lock& js, kj::String addr, jsg::Ref<Fetcher> binding) {
+  auto& ioctx = IoContext::current();
+  auto channel = binding->getSubrequestChannel(ioctx);
+
+  // Get a channel token for RPC usage, the container runtime can use this
+  // token later to redeem a Fetcher whose connect() handler processes the TCP stream.
+  auto token = channel->getToken(IoChannelFactory::ChannelTokenUsage::RPC);
+
+  auto req = rpcClient->setEgressTcpRequest();
+  req.setHostPort(addr);
+  req.setChannelToken(token);
+  return ioctx.awaitIo(js, req.sendIgnoringResult());
 }
 
 jsg::Promise<void> Container::monitor(jsg::Lock& js) {

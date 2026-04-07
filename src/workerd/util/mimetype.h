@@ -210,9 +210,6 @@ class MimeType final {
   // 128 bytes will keep all reasonable mimetypes on the stack.
 
   void paramsToString(ToStringBuffer& buffer) const;
-
-  static kj::Maybe<MimeType> tryParseImpl(
-      kj::ArrayPtr<const char> input, ParseOptions options = ParseOptions::DEFAULT);
 };
 
 inline ConstMimeType::operator MimeType() const {

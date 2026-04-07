@@ -460,6 +460,23 @@ void ServiceWorkerGlobalScope::startScheduled(kj::Date scheduledTime,
   }
 }
 
+namespace {
+// Returns true if an alarm failure should count against the user's retry limit.
+// A failure is user-generated if any of:
+//   - The exception was explicitly tagged with EXCEPTION_IS_USER_ERROR at construction time
+//     (e.g. state.abort(), exceededCpu, exceededMemory, overload queue).
+//   - The exception originated from user code throwing inside blockConcurrencyWhile, which
+//     breaks the input gate as a secondary side-effect.
+//   - The exception is a plain jsg.* error without broken.* or jsg-internal.* prefixes,
+//     meaning the user's handler threw directly.
+bool isAlarmFailureUserError(kj::StringPtr description, bool hasUserErrorDetail) {
+  if (hasUserErrorDetail) return true;
+  if (jsg::isExceptionFromInputGateBroken(description)) return true;
+  auto tunneled = jsg::tunneledErrorType(description);
+  return tunneled.isJsgError && !tunneled.isInternal && !tunneled.isDurableObjectReset;
+}
+}  // namespace
+
 kj::Promise<WorkerInterface::AlarmResult> ServiceWorkerGlobalScope::runAlarm(kj::Date scheduledTime,
     kj::Duration timeout,
     uint32_t retryCount,
@@ -516,6 +533,7 @@ kj::Promise<WorkerInterface::AlarmResult> ServiceWorkerGlobalScope::runAlarm(kj:
           // Report alarm handler failure and log it.
           auto e = KJ_EXCEPTION(OVERLOADED,
               "broken.dropped; worker_do_not_log; jsg.Error: Alarm exceeded its allowed execution time");
+          e.setDetail(jsg::EXCEPTION_IS_USER_ERROR, kj::heapArray<kj::byte>(0));
           context.getMetrics().reportFailure(e);
 
           // We don't want the handler to keep running after timeout.
@@ -563,30 +581,17 @@ kj::Promise<WorkerInterface::AlarmResult> ServiceWorkerGlobalScope::runAlarm(kj:
           }
         }
 
-        // We only want to retry against limits if it's a user error. By default let's check if the
-        // output gate is broken.
-        //
-        // Special case: when a user throws inside blockConcurrencyWhile after starting a storage
-        // operation, the output gate may also appear broken as a secondary side-effect. Treat it
-        // as a user error so retries count against the limit and the alarm is eventually deleted.
-        auto isInputGateBrokenByUser = jsg::isExceptionFromInputGateBroken(description);
-        auto shouldRetryCountsAgainstLimits =
-            !context.isOutputGateBroken() || isInputGateBrokenByUser;
+        auto isUserGeneratedError = isAlarmFailureUserError(description, isUserError);
+        auto shouldRetryCountsAgainstLimits = !context.isOutputGateBroken() || isUserGeneratedError;
 
         // We want to alert if we aren't going to count this alarm retry against limits.
-        // Skip logging when the output gate broke as a secondary effect of a user throw inside
-        // blockConcurrencyWhile: that is expected behaviour and already counted as a user error.
-        if (!isInputGateBrokenByUser && log && context.isOutputGateBroken()) {
+        // Skip logging when the output gate broke as a secondary effect of a user-generated error:
+        // that is expected behaviour and already counted as a user error.
+        if (!isUserGeneratedError && log && context.isOutputGateBroken()) {
           LOG_NOSENTRY(ERROR, "output lock broke during alarm execution", actorId, description);
-        } else if (!isInputGateBrokenByUser && context.isOutputGateBroken()) {
-          if (isUserError) {
-            // The handler failed because the user overloaded the object. It's their fault, we'll not
-            // retry forever.
-            shouldRetryCountsAgainstLimits = true;
-          }
-
-          // We don't usually log these messages, but it's useful to know the real reason we failed
-          // to correctly investigate stuck alarms.
+        } else if (!isUserGeneratedError && context.isOutputGateBroken()) {
+          // Tunneled or do-not-log non-user error with a broken output gate. Log for diagnostics
+          // so we can investigate stuck alarms.
           LOG_NOSENTRY(ERROR,
               "output lock broke during alarm execution without an interesting error description",
               actorId, description, shouldRetryCountsAgainstLimits);
@@ -611,29 +616,24 @@ kj::Promise<WorkerInterface::AlarmResult> ServiceWorkerGlobalScope::runAlarm(kj:
               actorId = kj::str(s);
             }
           }
-          // We only want to retry against limits if it's a user error. By default let's assume it's our
-          // fault.
-          //
-          // Special case: when a user throws inside blockConcurrencyWhile after starting a storage
-          // operation, the output gate also appears broken as a secondary side-effect. Treat it
-          // as a user error so retries count against the limit and the alarm is eventually deleted.
-          auto isInputGateBrokenByUser = jsg::isExceptionFromInputGateBroken(e.getDescription());
-          auto shouldRetryCountsAgainstLimits = isInputGateBrokenByUser;
+          auto isUserGeneratedError = isAlarmFailureUserError(
+              e.getDescription(), e.getDetail(jsg::EXCEPTION_IS_USER_ERROR) != kj::none);
+          auto shouldRetryCountsAgainstLimits = isUserGeneratedError;
           if (auto desc = e.getDescription();
               !jsg::isTunneledException(desc) && !jsg::isDoNotLogException(desc)) {
-            if (!isInputGateBrokenByUser) {
+            if (!isUserGeneratedError) {
               if (isInterestingException(e)) {
                 LOG_EXCEPTION("alarmOutputLock"_kj, e);
               } else {
                 LOG_NOSENTRY(ERROR, "output lock broke after executing alarm", actorId, e);
               }
             }
-          } else {
-            if (e.getDetail(jsg::EXCEPTION_IS_USER_ERROR) != kj::none) {
-              // The handler failed because the user overloaded the object. It's their fault, we'll not
-              // retry forever.
-              shouldRetryCountsAgainstLimits = true;
-            }
+          } else if (!isUserGeneratedError) {
+            // Tunneled or do-not-log exception that is not a user error. Forward as-is without
+            // counting against retry limits.
+            LOG_NOSENTRY(ERROR,
+                "output lock broke after executing alarm with tunneled non-user error", actorId,
+                e.getDescription());
           }
           return WorkerInterface::AlarmResult{.retry = true,
             .retryCountsAgainstLimit = shouldRetryCountsAgainstLimits,
@@ -672,9 +672,10 @@ kj::Promise<void> ServiceWorkerGlobalScope::eventTimeoutPromise(uint32_t timeout
   co_await IoContext::current().afterLimitTimeout(timeoutMs * kj::MILLISECONDS);
   // This is the ActorFlushReason for eviction in Cloudflare's internal implementation.
   auto evictionCode = 2;
-  actor.shutdown(evictionCode,
-      KJ_EXCEPTION(DISCONNECTED,
-          "broken.dropped; jsg.Error: Actor exceeded event execution time and was disconnected."));
+  auto e = KJ_EXCEPTION(DISCONNECTED,
+      "broken.dropped; jsg.Error: Actor exceeded event execution time and was disconnected.");
+  e.setDetail(jsg::EXCEPTION_IS_USER_ERROR, kj::heapArray<kj::byte>(0));
+  actor.shutdown(evictionCode, kj::mv(e));
 }
 
 kj::Promise<void> ServiceWorkerGlobalScope::setHibernatableEventTimeout(

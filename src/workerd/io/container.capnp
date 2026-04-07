@@ -228,8 +228,14 @@ interface Container @0x9aaceefc06523bca {
   # The runtime routes matching decrypted HTTP traffic back to Workers using `channelToken` and
   # must ensure the container trusts the interception CA.
 
-
-  # TODO: setEgressTcp
+  setEgressTcp @13 (hostPort :Text, channelToken :Data);
+  # Configures egress TCP routing for the container. When the container attempts a raw TCP
+  # connection to the specified host:port, the connection is routed back to the Workers
+  # runtime using the channel token. The worker binding is expected to implement a connect()
+  # handler that receives the destination address and a bidirectional byte stream.
+  # The format of `hostPort` is '<ip|cidr>[':'<port>]'. Hostname glob matching is not
+  # supported for TCP since there is no application-layer hostname information. If `port`
+  # is omitted, all ports are matched.
 
   snapshotDirectory @10 SnapshotDirectoryParams -> (snapshot :DirectorySnapshot);
   # Creates a snapshot for a directory in the running container.

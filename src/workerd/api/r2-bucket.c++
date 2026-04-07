@@ -671,7 +671,8 @@ jsg::Promise<kj::Maybe<jsg::Ref<R2Bucket::HeadResult>>> R2Bucket::put(jsg::Lock&
       KJ_IF_SOME(md5, o.md5) {
         verifyHashNotSpecified();
         KJ_SWITCH_ONEOF(md5) {
-          KJ_CASE_ONEOF(bin, jsg::BufferSource) {
+          KJ_CASE_ONEOF(binRef, jsg::JsRef<jsg::JsBufferSource>) {
+            auto bin = binRef.getHandle(js);
             JSG_REQUIRE(bin.size() == 16, TypeError, "MD5 is 16 bytes, not ", bin.size());
             putBuilder.setMd5(bin.asArrayPtr());
             traceContext.setTag("cloudflare.r2.request.checksum.type"_kjc, "md5"_kjc);
@@ -692,7 +693,8 @@ jsg::Promise<kj::Maybe<jsg::Ref<R2Bucket::HeadResult>>> R2Bucket::put(jsg::Lock&
       KJ_IF_SOME(sha1, o.sha1) {
         verifyHashNotSpecified();
         KJ_SWITCH_ONEOF(sha1) {
-          KJ_CASE_ONEOF(bin, jsg::BufferSource) {
+          KJ_CASE_ONEOF(binRef, jsg::JsRef<jsg::JsBufferSource>) {
+            auto bin = binRef.getHandle(js);
             JSG_REQUIRE(bin.size() == 20, TypeError, "SHA-1 is 20 bytes, not ", bin.size());
             putBuilder.setSha1(bin.asArrayPtr());
             traceContext.setTag("cloudflare.r2.request.checksum.type"_kjc, "sha1"_kjc);
@@ -713,7 +715,8 @@ jsg::Promise<kj::Maybe<jsg::Ref<R2Bucket::HeadResult>>> R2Bucket::put(jsg::Lock&
       KJ_IF_SOME(sha256, o.sha256) {
         verifyHashNotSpecified();
         KJ_SWITCH_ONEOF(sha256) {
-          KJ_CASE_ONEOF(bin, jsg::BufferSource) {
+          KJ_CASE_ONEOF(binRef, jsg::JsRef<jsg::JsBufferSource>) {
+            auto bin = binRef.getHandle(js);
             JSG_REQUIRE(bin.size() == 32, TypeError, "SHA-256 is 32 bytes, not ", bin.size());
             putBuilder.setSha256(bin.asArrayPtr());
             traceContext.setTag("cloudflare.r2.request.checksum.type"_kjc, "sha256"_kjc);
@@ -735,7 +738,8 @@ jsg::Promise<kj::Maybe<jsg::Ref<R2Bucket::HeadResult>>> R2Bucket::put(jsg::Lock&
       KJ_IF_SOME(sha384, o.sha384) {
         verifyHashNotSpecified();
         KJ_SWITCH_ONEOF(sha384) {
-          KJ_CASE_ONEOF(bin, jsg::BufferSource) {
+          KJ_CASE_ONEOF(binRef, jsg::JsRef<jsg::JsBufferSource>) {
+            auto bin = binRef.getHandle(js);
             JSG_REQUIRE(bin.size() == 48, TypeError, "SHA-384 is 48 bytes, not ", bin.size());
             putBuilder.setSha384(bin.asArrayPtr());
             traceContext.setTag("cloudflare.r2.request.checksum.type"_kjc, "sha384"_kjc);
@@ -757,7 +761,8 @@ jsg::Promise<kj::Maybe<jsg::Ref<R2Bucket::HeadResult>>> R2Bucket::put(jsg::Lock&
       KJ_IF_SOME(sha512, o.sha512) {
         verifyHashNotSpecified();
         KJ_SWITCH_ONEOF(sha512) {
-          KJ_CASE_ONEOF(bin, jsg::BufferSource) {
+          KJ_CASE_ONEOF(binRef, jsg::JsRef<jsg::JsBufferSource>) {
+            auto bin = binRef.getHandle(js);
             JSG_REQUIRE(bin.size() == 64, TypeError, "SHA-512 is 64 bytes, not ", bin.size());
             putBuilder.setSha512(bin.asArrayPtr());
             traceContext.setTag("cloudflare.r2.request.checksum.type"_kjc, "sha512"_kjc);
@@ -1436,30 +1441,26 @@ R2Bucket::StringChecksums R2Bucket::Checksums::toJSON() {
 }
 
 namespace {
-jsg::Optional<jsg::BufferSource> copyHash(
+jsg::Optional<jsg::JsArrayBuffer> copyHash(
     jsg::Lock& js, const jsg::Optional<kj::Array<kj::byte>>& maybeHash) {
-  KJ_IF_SOME(hash, maybeHash) {
-    auto backing = jsg::BackingStore::alloc<v8::ArrayBuffer>(js, hash.size());
-    backing.asArrayPtr().copyFrom(hash);
-    return jsg::BufferSource(js, kj::mv(backing));
-  }
-  return kj::none;
+  return maybeHash.map(
+      [&](const kj::Array<kj::byte>& hash) { return jsg::JsArrayBuffer::create(js, hash); });
 }
 }  // namespace
 
-jsg::Optional<jsg::BufferSource> R2Bucket::Checksums::getMd5(jsg::Lock& js) {
+jsg::Optional<jsg::JsArrayBuffer> R2Bucket::Checksums::getMd5(jsg::Lock& js) {
   return copyHash(js, md5);
 }
-jsg::Optional<jsg::BufferSource> R2Bucket::Checksums::getSha1(jsg::Lock& js) {
+jsg::Optional<jsg::JsArrayBuffer> R2Bucket::Checksums::getSha1(jsg::Lock& js) {
   return copyHash(js, sha1);
 }
-jsg::Optional<jsg::BufferSource> R2Bucket::Checksums::getSha256(jsg::Lock& js) {
+jsg::Optional<jsg::JsArrayBuffer> R2Bucket::Checksums::getSha256(jsg::Lock& js) {
   return copyHash(js, sha256);
 }
-jsg::Optional<jsg::BufferSource> R2Bucket::Checksums::getSha384(jsg::Lock& js) {
+jsg::Optional<jsg::JsArrayBuffer> R2Bucket::Checksums::getSha384(jsg::Lock& js) {
   return copyHash(js, sha384);
 }
-jsg::Optional<jsg::BufferSource> R2Bucket::Checksums::getSha512(jsg::Lock& js) {
+jsg::Optional<jsg::JsArrayBuffer> R2Bucket::Checksums::getSha512(jsg::Lock& js) {
   return copyHash(js, sha512);
 }
 

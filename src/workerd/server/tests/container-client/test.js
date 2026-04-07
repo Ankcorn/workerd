@@ -1107,6 +1107,69 @@ export class DurableObjectExample extends DurableObject {
     );
   }
 
+  async testSetEgressTcp() {
+    const container = this.ctx.container;
+    if (container.running) {
+      const monitor = container.monitor().catch((_err) => {});
+      await container.destroy();
+      await monitor;
+    }
+
+    assert.strictEqual(container.running, false);
+
+    // Register a TCP egress mapping before the container starts.
+    // When the container connects to 11.0.0.1:7777 via raw TCP, the
+    // sidecar forwards the stream to our TestService.connect() handler.
+    await container.interceptOutboundTcp(
+      '11.0.0.1:7777',
+      this.ctx.exports.TestService({ props: { id: 500 } })
+    );
+
+    container.start();
+
+    container.monitor().catch((err) => {
+      console.error('Container exited with an error:', err.message);
+    });
+
+    await this.waitUntilContainerIsHealthy();
+
+    // Also register another mapping after the container is running.
+    await container.interceptOutboundTcp(
+      '11.0.0.2:7777',
+      this.ctx.exports.TestService({ props: { id: 600 } })
+    );
+
+    // Ask the container to open a raw TCP connection to 11.0.0.1:7777.
+    // The container's /intercept-tcp endpoint sends "ping\n" over the
+    // socket. The sidecar intercepts it and routes it to
+    // TestService.connect(), which reads the data and echoes it back
+    // prefixed with the binding id.
+    {
+      const response = await container
+        .getTcpPort(8080)
+        .fetch('http://foo/intercept-tcp', {
+          headers: { 'x-tcp-target': '11.0.0.1:7777' },
+          signal: AbortSignal.timeout(DEFAULT_TIMEOUT_DURATION),
+        });
+      assert.equal(response.status, 200);
+      const body = await response.text();
+      assert.equal(body, 'tcp binding: 500 got: ping');
+    }
+
+    // Verify the second mapping works too.
+    {
+      const response = await container
+        .getTcpPort(8080)
+        .fetch('http://foo/intercept-tcp', {
+          headers: { 'x-tcp-target': '11.0.0.2:7777' },
+          signal: AbortSignal.timeout(DEFAULT_TIMEOUT_DURATION),
+        });
+      assert.equal(response.status, 200);
+      const body = await response.text();
+      assert.equal(body, 'tcp binding: 600 got: ping');
+    }
+  }
+
   async testInterceptWebSocket() {
     const container = this.ctx.container;
     if (container.running) {
@@ -2258,6 +2321,35 @@ export class TestService extends WorkerEntrypoint {
       'hello binding: ' + this.ctx.props.id + ' ' + request.url
     );
   }
+
+  // Handle raw TCP connections forwarded by interceptOutboundTcp.
+  // The socket has .readable / .writable streams. We read until we
+  // see a newline delimiter, then write back a response that includes
+  // the binding id and the received message.
+  async connect(socket) {
+    const id = this.ctx.props.id;
+    const enc = new TextEncoder();
+    const dec = new TextDecoder();
+
+    // Read from the socket until we hit a newline.
+    const reader = socket.readable.getReader();
+    let incoming = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      incoming += dec.decode(value, { stream: true });
+      if (incoming.includes('\n')) break;
+    }
+    incoming += dec.decode();
+    reader.releaseLock();
+
+    // Write response and close.
+    const writer = socket.writable.getWriter();
+    await writer.write(
+      enc.encode(`tcp binding: ${id} got: ${incoming.trim()}`)
+    );
+    await writer.close();
+  }
 }
 
 export class DurableObjectExample2 extends DurableObjectExample {}
@@ -2540,6 +2632,24 @@ export const testSetEgressHttps = {
 
     stub = env.MY_CONTAINER.get(id);
     await stub.testSetEgressHttps();
+  },
+};
+
+export const testSetEgressTcp = {
+  async test(_ctrl, env) {
+    const id = env.MY_CONTAINER.idFromName(
+      getRandomDurableObjectName('testSetEgressTcp')
+    );
+    let stub = env.MY_CONTAINER.get(id);
+    await stub.testSetEgressTcp();
+    try {
+      await stub.abort();
+    } catch {
+      // intentionally empty
+    }
+
+    stub = env.MY_CONTAINER.get(id);
+    await stub.testSetEgressTcp();
   },
 };
 

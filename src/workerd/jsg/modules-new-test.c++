@@ -2076,5 +2076,98 @@ KJ_TEST("Using a deferred eval callback works") {
   });
 }
 
+// ======================================================================================
+
+KJ_TEST("Fallback receives rawSpecifier and source through V8 static import resolution") {
+  // This test verifies that when a module is resolved through V8's static import
+  // pipeline (which goes through IsolateModuleRegistry::resolveWithCaching), the
+  // fallback callback receives the correct rawSpecifier and source fields.
+  // Regression test for https://github.com/cloudflare/workerd/issues/6474 and
+  // https://github.com/cloudflare/workerd/issues/6475.
+
+  ResolveObserverImpl resolveObserver;
+  CompilationObserver compilationObserver;
+
+  // The entry module statically imports "./missing", which is not in the bundle.
+  // This forces fallback resolution through resolveWithCaching.
+  ModuleBundle::BundleBuilder bundleBuilder(BASE);
+  auto main = kj::str("import './missing';");
+  bundleBuilder.addEsmModule("main", main, Module::Flags::MAIN);
+
+  bool fallbackCalled = false;
+  auto fallback = ModuleBundle::newFallbackBundle(
+      [&](const ResolveContext& context) -> kj::Maybe<kj::OneOf<kj::String, kj::Own<Module>>> {
+    fallbackCalled = true;
+    // The rawSpecifier should be the original "./missing" as written in the import.
+    KJ_ASSERT(context.rawSpecifier == "./missing"_kjc);
+    // A static import should have source == STATIC_IMPORT.
+    KJ_ASSERT(context.source == ResolveContext::Source::STATIC_IMPORT);
+    // Return a synthetic module to satisfy the import.
+    return kj::Maybe<kj::OneOf<kj::String, kj::Own<Module>>>(
+        Module::newSynthetic(context.normalizedSpecifier.clone(), Module::Type::FALLBACK,
+            Module::newDataModuleHandler(nullptr)));
+  });
+
+  auto registry = ModuleRegistry::Builder(
+      resolveObserver, BASE, ModuleRegistry::Builder::Options::ALLOW_FALLBACK)
+                      .add(bundleBuilder.finish())
+                      .add(kj::mv(fallback))
+                      .finish();
+
+  PREAMBLE([&](Lock& js) {
+    auto attached = registry->attachToIsolate(js, compilationObserver);
+
+    js.tryCatch([&] { ModuleRegistry::resolve(js, "file:///main"); },
+        [&](Value exception) { js.throwException(kj::mv(exception)); });
+  });
+
+  KJ_ASSERT(fallbackCalled);
+}
+
+// ======================================================================================
+
+KJ_TEST("Fallback receives REQUIRE source through require() resolution") {
+  // This test verifies that when a module is resolved through require() (which also
+  // goes through IsolateModuleRegistry::resolveWithCaching), the fallback callback
+  // receives source == REQUIRE.
+  // Regression test for https://github.com/cloudflare/workerd/issues/6475.
+
+  ResolveObserverImpl resolveObserver;
+  CompilationObserver compilationObserver;
+
+  ModuleBundle::BundleBuilder bundleBuilder(BASE);
+
+  bool fallbackCalled = false;
+  auto fallback = ModuleBundle::newFallbackBundle(
+      [&](const ResolveContext& context) -> kj::Maybe<kj::OneOf<kj::String, kj::Own<Module>>> {
+    fallbackCalled = true;
+    // A require() call should have source == REQUIRE.
+    KJ_ASSERT(context.source == ResolveContext::Source::REQUIRE);
+    KJ_ASSERT(context.rawSpecifier == "missing"_kjc);
+    return kj::Maybe<kj::OneOf<kj::String, kj::Own<Module>>>(
+        Module::newSynthetic(context.normalizedSpecifier.clone(), Module::Type::FALLBACK,
+            Module::newDataModuleHandler(nullptr)));
+  });
+
+  auto registry = ModuleRegistry::Builder(
+      resolveObserver, BASE, ModuleRegistry::Builder::Options::ALLOW_FALLBACK)
+                      .add(bundleBuilder.finish())
+                      .add(kj::mv(fallback))
+                      .finish();
+
+  PREAMBLE([&](Lock& js) {
+    auto attached = registry->attachToIsolate(js, compilationObserver);
+
+    js.tryCatch([&] {
+      // tryResolveModuleNamespace with Source::REQUIRE exercises the require() path
+      // through IsolateModuleRegistry::require() -> resolveWithCaching().
+      ModuleRegistry::tryResolveModuleNamespace(
+          js, "missing", ResolveContext::Type::BUNDLE, ResolveContext::Source::REQUIRE);
+    }, [&](Value exception) { js.throwException(kj::mv(exception)); });
+  });
+
+  KJ_ASSERT(fallbackCalled);
+}
+
 }  // namespace
 }  // namespace workerd::jsg::test

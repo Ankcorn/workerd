@@ -1,8 +1,10 @@
 const { createServer } = require('http');
+const net = require('net');
 
 const webSocketEnabled = process.env.WS_ENABLED === 'true';
 const wsProxyTarget = process.env.WS_PROXY_TARGET || null;
 const wsProxySecure = process.env.WS_PROXY_SECURE === 'true';
+const tcpPort = parseInt(process.env.TCP_PORT || '0', 10);
 
 const server = createServer(function (req, res) {
   if (req.url === '/ws') {
@@ -110,6 +112,48 @@ const server = createServer(function (req, res) {
     return;
   }
 
+  // Make a raw TCP connection to x-tcp-target header (host:port), send
+  // "ping\n", read the response, and return it over HTTP.
+  if (req.url === '/intercept-tcp') {
+    const target = req.headers['x-tcp-target'];
+    if (!target) {
+      res.writeHead(400, { 'Content-Type': 'text/plain' });
+      res.write('Missing x-tcp-target header');
+      res.end();
+      return;
+    }
+
+    const [host, portStr] = target.split(':');
+    const port = parseInt(portStr, 10);
+    const socket = net.createConnection({ host, port }, () => {
+      socket.write('ping\n');
+    });
+
+    let data = '';
+    socket.on('data', (chunk) => {
+      data += chunk.toString();
+      socket.end();
+    });
+
+    socket.on('close', () => {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.write(data);
+      res.end();
+    });
+
+    socket.on('error', (err) => {
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.write(`TCP error: ${err.message}`);
+      res.end();
+    });
+
+    // Give it a timeout so the test doesn't hang forever.
+    socket.setTimeout(5000, () => {
+      socket.destroy(new Error('TCP connection timed out'));
+    });
+    return;
+  }
+
   if (req.url === '/intercept-https') {
     const targetHost = req.headers['x-host'] || 'example.com';
     fetch(`https://${targetHost}`)
@@ -167,3 +211,19 @@ server.listen(8080, function () {
     console.log('WebSocket support enabled');
   }
 });
+
+// Optional TCP echo server used by TCP egress intercept tests.
+// When TCP_PORT is set to a non-zero value, we start a plain TCP server
+// that echoes back whatever it receives prefixed with "echo:".
+if (tcpPort > 0) {
+  const tcpServer = net.createServer(function (socket) {
+    socket.on('data', function (chunk) {
+      socket.write('echo:' + chunk.toString());
+      socket.end();
+    });
+  });
+
+  tcpServer.listen(tcpPort, function () {
+    console.log('TCP echo server listening on port ' + tcpPort);
+  });
+}
