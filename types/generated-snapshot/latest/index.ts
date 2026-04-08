@@ -13860,6 +13860,11 @@ export declare namespace TailStream {
     readonly tag?: string;
     readonly message?: string;
   }
+  interface TracePreviewInfo {
+    readonly id: string;
+    readonly slug: string;
+    readonly name: string;
+  }
   interface Onset {
     readonly type: "onset";
     readonly attributes: Attribute[];
@@ -13871,6 +13876,7 @@ export declare namespace TailStream {
     readonly scriptName?: string;
     readonly scriptTags?: string[];
     readonly scriptVersion?: ScriptVersion;
+    readonly preview?: TracePreviewInfo;
     readonly info:
       | FetchEventInfo
       | ConnectEventInfo
