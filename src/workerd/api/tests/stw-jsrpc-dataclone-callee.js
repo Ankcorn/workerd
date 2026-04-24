@@ -4,15 +4,7 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 
 export class RpcEntrypoint extends WorkerEntrypoint {
-  async logViaRpc() {
-    console.log('callee jsrpc log');
-    return 'jsrpc ok';
+  async ping() {
+    return 'ok';
   }
 }
-
-export default {
-  async fetch() {
-    console.log('callee fetch log');
-    return new Response('fetch ok');
-  },
-};
