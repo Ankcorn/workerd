@@ -93,8 +93,8 @@ wd_test(
     args = ["--experimental"],
     data = [
         "stw-jsrpc-dataclone-callee.js",
-        "stw-jsrpc-dataclone-tail.js",
         "stw-jsrpc-dataclone-receiver.js",
+        "stw-jsrpc-dataclone-tail.js",
     ],
 )
 
