@@ -217,11 +217,14 @@ struct DeserializeResult {
 };
 
 // Call to construct a JS value from an `rpc::JsValue`.
-DeserializeResult deserializeJsValue(
-    jsg::Lock& js, rpc::JsValue::Reader reader, kj::Maybe<StreamSinkImpl&> streamSink = kj::none) {
+DeserializeResult deserializeJsValue(jsg::Lock& js,
+    rpc::JsValue::Reader reader,
+    kj::LiteralStringConst debugContext,
+    kj::Maybe<StreamSinkImpl&> streamSink = kj::none) {
   auto disposalGroup = kj::heap<RpcStubDisposalGroup>();
 
-  RpcDeserializerExternalHandler externalHandler(reader.getExternals(), *disposalGroup, streamSink);
+  RpcDeserializerExternalHandler externalHandler(
+      reader.getExternals(), *disposalGroup, streamSink, debugContext);
 
   jsg::Deserializer deserializer(js, reader.getV8Serialized(), kj::none, kj::none,
       jsg::Deserializer::Options{
@@ -250,7 +253,8 @@ DeserializeResult deserializeJsValue(
 jsg::JsValue deserializeRpcReturnValue(jsg::Lock& js,
     rpc::JsRpcTarget::CallResults::Reader callResults,
     kj::Maybe<StreamSinkImpl&> streamSink) {
-  auto [value, disposalGroup, ss] = deserializeJsValue(js, callResults.getResult(), streamSink);
+  auto [value, disposalGroup, ss] =
+      deserializeJsValue(js, callResults.getResult(), "return"_kjc, streamSink);
 
   if (streamSink == kj::none) {
     KJ_REQUIRE(ss == kj::none,
@@ -1423,7 +1427,7 @@ class JsRpcTargetBase: public rpc::JsRpcTarget::Server {
       kj::Maybe<rpc::JsValue::Reader> args) {
     // We received arguments from the client, deserialize them back to JS.
     KJ_IF_SOME(a, args) {
-      auto [value, disposalGroup, streamSink] = deserializeJsValue(js, a);
+      auto [value, disposalGroup, streamSink] = deserializeJsValue(js, a, "params"_kjc);
       auto args = KJ_REQUIRE_NONNULL(
           value.tryCast<jsg::JsArray>(), "expected JsArray when deserializing arguments.");
       // Call() expects a `Local<Value> []`... so we populate an array.
@@ -1483,7 +1487,7 @@ class JsRpcTargetBase: public rpc::JsRpcTarget::Server {
     kj::Maybe<jsg::JsArray> argsArrayFromClient;
     size_t argCountFromClient = 0;
     KJ_IF_SOME(a, args) {
-      auto [value, disposalGroup, ss] = deserializeJsValue(js, a);
+      auto [value, disposalGroup, ss] = deserializeJsValue(js, a, "paramsNonClass"_kjc);
       streamSink = kj::mv(ss);
 
       auto array = KJ_REQUIRE_NONNULL(

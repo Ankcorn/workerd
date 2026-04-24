@@ -131,17 +131,27 @@ kj::Promise<void> ExternalPusherImpl::pushByteStream(PushByteStreamContext conte
 }
 
 kj::Own<kj::AsyncInputStream> ExternalPusherImpl::unwrapStream(
-    ExternalPusher::InputStream::Client cap) {
-  return kj::newPromisedStream(unwrapStreamImpl(kj::mv(cap)));
+    ExternalPusher::InputStream::Client cap, kj::LiteralStringConst debugContext) {
+  return kj::newPromisedStream(unwrapStreamImpl(kj::mv(cap), debugContext));
 }
 
 kj::Promise<kj::Own<kj::AsyncInputStream>> ExternalPusherImpl::unwrapStreamImpl(
-    ExternalPusher::InputStream::Client cap) {
-  auto& unwrapped = KJ_REQUIRE_NONNULL(
-      co_await inputStreamSet.getLocalServer(cap), "pushed external is not a byte stream");
+    ExternalPusher::InputStream::Client cap, kj::LiteralStringConst debugContext) {
+  KJ_IF_SOME(unwrapped, co_await inputStreamSet.getLocalServer(cap)) {
+    co_return KJ_REQUIRE_NONNULL(kj::mv(kj::downcast<InputStreamImpl>(unwrapped).stream),
+        "pushed byte stream has already been consumed");
+  } else {
+    auto hook = capnp::ClientHook::from(cap);
+    KJ_IF_SOME(r, hook->getResolved()) {
+      hook = r.addRef();
+    }
 
-  co_return KJ_REQUIRE_NONNULL(kj::mv(kj::downcast<InputStreamImpl>(unwrapped).stream),
-      "pushed byte stream has already been consumed");
+    // If we do `typeid(*hook)`, we get a compiler warning (which becomes an error) about the
+    // parameter to typeid having a side effect... so do it here.
+    auto& hookRef = *hook;
+
+    KJ_FAIL_REQUIRE("pushed external is not a byte stream", debugContext, typeid(hookRef).name());
+  }
 }
 
 // =======================================================================================
