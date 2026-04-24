@@ -214,9 +214,9 @@ jsg::JsValue ToJs(jsg::Lock& js, const FetchEventInfo& info, StringCache& cache)
 }
 
 jsg::JsValue ToJs(jsg::Lock& js, const JsRpcEventInfo& info, StringCache& cache) {
-  static const kj::StringPtr keys[] = {TYPE_STR};
-  jsg::JsValue values[] = {cache.get(js, JSRPC_STR)};
-  return js.obj(kj::arrayPtr(keys), kj::arrayPtr(values));
+  auto obj = js.obj();
+  obj.set(js, TYPE_STR, cache.get(js, JSRPC_STR));
+  return obj;
 }
 
 jsg::JsValue ToJs(jsg::Lock& js, const ScheduledEventInfo& info, StringCache& cache) {
