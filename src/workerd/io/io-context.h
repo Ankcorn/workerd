@@ -174,6 +174,28 @@ class IoContext_IncomingRequest final {
   kj::Maybe<kj::SourceLocation> deliveredLocation;
 
   friend class IoContext;
+
+ public:
+  // Data written by the callee via ctx.tracing.setBindingSpan(). Only populated when
+  // allowBindingSpanEnrichment is true (set at dispatch time from the binding config).
+  // The last call before the RPC method returns wins (last-caller-wins semantics).
+  struct PendingSpanEnrichment {
+    kj::String name;
+    struct Attribute {
+      kj::String key;
+      SpanBuilder::TagInitValue value;
+    };
+    kj::Array<Attribute> attributes;
+  };
+  kj::Maybe<PendingSpanEnrichment> pendingBindingSpanEnrichment;
+
+  // Set at dispatch time when the binding config carries a spanEnrichmentPolicy.
+  // Controls whether ctx.tracing.setBindingSpan() is exposed to the callee.
+  bool allowBindingSpanEnrichment = false;
+
+  kj::Maybe<PendingSpanEnrichment&> getPendingBindingSpanEnrichment() {
+    return pendingBindingSpanEnrichment;
+  }
 };
 
 // IoContext holds state associated with a single I/O context. For stateless requests, each
@@ -385,6 +407,30 @@ class IoContext final: public kj::Refcounted, private kj::TaskSet::ErrorHandler 
   // TODO(cleanup): This is a hack, remove after addressing the underlying issue.
   bool hasCurrentIncomingRequest() {
     return !incomingRequests.empty();
+  }
+
+  // Returns true if the current invocation was dispatched via a binding that carries a
+  // spanEnrichmentPolicy — i.e. ctx.tracing.setBindingSpan() is permitted.
+  bool allowBindingSpanEnrichment() {
+    if (incomingRequests.empty()) return false;
+    return getCurrentIncomingRequest().allowBindingSpanEnrichment;
+  }
+
+  // Called by ctx.tracing.setBindingSpan() to store enrichment for the current invocation.
+  // Last-caller-wins; any previous pending enrichment is replaced.
+  void setPendingBindingSpanEnrichment(IncomingRequest::PendingSpanEnrichment enrichment) {
+    KJ_REQUIRE(!incomingRequests.empty());
+    getCurrentIncomingRequest().pendingBindingSpanEnrichment = kj::mv(enrichment);
+  }
+
+  // Drains and returns any pending span enrichment written by the callee.
+  // Called by the caller's runtime after CallResults arrive.
+  kj::Maybe<IncomingRequest::PendingSpanEnrichment> takePendingBindingSpanEnrichment() {
+    if (incomingRequests.empty()) return kj::none;
+    auto& req = getCurrentIncomingRequest();
+    kj::Maybe<IncomingRequest::PendingSpanEnrichment> result = kj::mv(req.pendingBindingSpanEnrichment);
+    req.pendingBindingSpanEnrichment = kj::none;
+    return result;
   }
 
   // Like requireCurrent() but throws a JS error if this IoContext is not the current.

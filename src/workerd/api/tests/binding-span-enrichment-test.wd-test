@@ -1,0 +1,82 @@
+using Workerd = import "/workerd/workerd.capnp";
+
+# Tests for binding span enrichment (ctx.tracing.setBindingSpan).
+#
+# Test 1: no spanEnrichmentPolicy on the binding → setBindingSpan is silently ignored.
+# Test 2: spanEnrichmentPolicy present → callee renames the jsRpcSession span; the renamed
+#         span with attributes appears in the caller's STW stream.
+#
+# The caller tests just trigger the work. The `validate` test in the tail worker
+# waits for all invocation outcomes before asserting on the collected spans.
+
+const unitTests :Workerd.Config = (
+  services = [
+    (name = "caller",      worker = .callerWorker),
+    (name = "callee",      worker = .calleeWorker),
+    (name = "callee-enrichable", worker = .calleeEnrichableWorker),
+    (name = "stw",         worker = .tailWorker),
+  ]
+);
+
+# ---------------------------------------------------------------------------
+# Caller worker — runs the test cases, holds service bindings to each callee.
+# ---------------------------------------------------------------------------
+const callerWorker :Workerd.Worker = (
+  modules = [
+    (name = "worker", esModule = embed "binding-span-enrichment-caller.js"),
+  ],
+  compatibilityFlags = ["nodejs_compat", "experimental", "rpc"],
+  streamingTails = ["stw"],
+  bindings = [
+    # Plain service binding — no spanEnrichmentPolicy.
+    (
+      name = "calleeNoPolicy",
+      service = (name = "callee", entrypoint = "CalleeEntrypoint")
+    ),
+    # Service binding with spanEnrichmentPolicy.
+    # TODO(impl): spanEnrichmentPolicy field does not exist yet in workerd.capnp;
+    # add it as part of the implementation of this feature.
+    (
+      name = "calleeWithPolicy",
+      service = (
+        name = "callee-enrichable",
+        entrypoint = "CalleeEnrichableEntrypoint",
+        spanEnrichmentPolicy = (
+          allowedNames        = ["ai_gateway.run"],
+          allowedAttrPrefixes = ["gen_ai.", "cf.aig."],
+        )
+      )
+    ),
+  ]
+);
+
+# ---------------------------------------------------------------------------
+# Callee — no enrichment flag, used for the "no policy" test.
+# ---------------------------------------------------------------------------
+const calleeWorker :Workerd.Worker = (
+  modules = [
+    (name = "worker", esModule = embed "binding-span-enrichment-callee.js"),
+  ],
+  compatibilityFlags = ["nodejs_compat", "experimental", "rpc"],
+);
+
+# ---------------------------------------------------------------------------
+# Callee — binding config carries spanEnrichmentPolicy.
+# ---------------------------------------------------------------------------
+const calleeEnrichableWorker :Workerd.Worker = (
+  modules = [
+    (name = "worker", esModule = embed "binding-span-enrichment-callee.js"),
+  ],
+  compatibilityFlags = ["nodejs_compat", "experimental", "rpc"],
+);
+
+# ---------------------------------------------------------------------------
+# Streaming tail worker — collects spans and exports the validate test.
+# ---------------------------------------------------------------------------
+const tailWorker :Workerd.Worker = (
+  modules = [
+    (name = "worker", esModule = embed "binding-span-enrichment-tail.js"),
+    (name = "instrumentation-test-helper", esModule = embed "../../../cloudflare/internal/test/instrumentation-test-helper.js"),
+  ],
+  compatibilityFlags = ["nodejs_compat", "experimental", "rpc"],
+);

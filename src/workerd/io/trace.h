@@ -1238,12 +1238,44 @@ inline SpanBuilder SpanBuilder::newChild(
 // TraceContext to keep track of user tracing/existing tracing better
 class TraceContext {
  public:
+  // Caller-side policy governing binding span enrichment for this call.
+  // Populated by Fetcher::getClientWithTracing() when the binding config carries a policy.
+  // Read by the callImpl response lambda to filter enrichment from CallResults.
+  struct SpanEnrichmentPolicy {
+    kj::Array<kj::String> allowedAttrPrefixes;
+    kj::Array<kj::String> allowedNames;
+  };
+  kj::Maybe<SpanEnrichmentPolicy> spanEnrichmentPolicy;
+
+  // Pending enrichment written by the callImpl response lambda after CallResults arrive.
+  // Applied to userSpan just before it closes (in ~TraceContext).
+  struct PendingEnrichment {
+    struct Attribute {
+      kj::String key;
+      SpanBuilder::TagInitValue value;
+    };
+    kj::Maybe<kj::String> name;
+    kj::Array<Attribute> attributes;
+  };
+  kj::Maybe<PendingEnrichment> pendingEnrichment;
+
   TraceContext(): span(nullptr), userSpan(nullptr) {}
   TraceContext(SpanBuilder span, SpanBuilder userSpan)
       : span(kj::mv(span)),
         userSpan(kj::mv(userSpan)) {}
   TraceContext(TraceContext&& other) = default;
   TraceContext& operator=(TraceContext&& other) = default;
+  ~TraceContext() noexcept(false) {
+    // Apply any pending enrichment before the userSpan closes.
+    KJ_IF_SOME(enrichment, pendingEnrichment) {
+      KJ_IF_SOME(name, enrichment.name) {
+        userSpan.setOperationName(kj::ConstString(kj::str(name)));
+      }
+      for (auto& attr : enrichment.attributes) {
+        userSpan.setTag(kj::ConstString(kj::str(attr.key)), kj::mv(attr.value));
+      }
+    }
+  }
   KJ_DISALLOW_COPY(TraceContext);
 
   // Set a tag on both the internal span and user span.
@@ -1258,6 +1290,9 @@ class TraceContext {
   SpanParent getUserSpanParent() {
     return SpanParent(userSpan);
   }
+
+  // Exposed for callImpl's response lambda to apply enrichment.
+  SpanBuilder& getUserSpan() { return userSpan; }
 
  private:
   SpanBuilder span;

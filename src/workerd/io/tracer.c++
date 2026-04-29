@@ -177,6 +177,24 @@ void WorkerTracer::addSpanOpen(tracing::SpanId spanId,
       spanOpenContext, tracing::SpanOpen(spanId, kj::mv(operationName)), startTime, spanNameSize);
 }
 
+void WorkerTracer::addSpanUpdateName(tracing::SpanId spanId, kj::ConstString operationName) {
+  if (pipelineLogLevel == PipelineLogLevel::NONE) {
+    return;
+  }
+  auto& tailStreamWriter = KJ_UNWRAP_OR_RETURN(maybeTailStreamWriter);
+  auto& topLevelContext = KJ_ASSERT_NONNULL(topLevelInvocationSpanContext);
+  // Emit a single-attribute event with key "span.name" to signal a post-open rename.
+  // The tail worker reads this attribute and updates its local span name record.
+  auto spanComponentContext = tracing::InvocationSpanContext(
+      topLevelContext.getTraceId(), topLevelContext.getInvocationId(), spanId);
+  size_t nameSize = operationName.size();
+  kj::Vector<tracing::Attribute> attrVec(1);
+  attrVec.add(tracing::Attribute("span.name"_kjc,
+      tracing::Attribute::Value(kj::ConstString(kj::str(operationName)))));
+  tailStreamWriter->report(spanComponentContext, attrVec.releaseAsArray(),
+      kj::systemPreciseCalendarClock().now(), nameSize);
+}
+
 void WorkerTracer::addSpanClose(tracing::SpanEndData&& span, kj::Maybe<kj::Date> maybeStartTime) {
   if (pipelineLogLevel == PipelineLogLevel::NONE) {
     return;
@@ -587,6 +605,12 @@ void UserSpanObserver::onOpen(kj::ConstString operationName, kj::Date startTime)
         submitter->submitUserSpanOpen(spanId, parentSpanId, kj::mv(operationName), startTime);
   } else {
     wasAccepted = submitter->submitSpanOpen(spanId, parentSpanId, kj::mv(operationName), startTime);
+  }
+}
+
+void UserSpanObserver::onUpdateName(kj::ConstString operationName) {
+  if (wasAccepted) {
+    submitter->submitSpanUpdateName(spanId, kj::mv(operationName));
   }
 }
 

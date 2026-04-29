@@ -48,6 +48,7 @@ class BaseTracer: public kj::Refcounted {
       kj::Date startTime) = 0;
   // Add a span close event.
   virtual void addSpanClose(tracing::SpanEndData&& span, kj::Maybe<kj::Date> maybeStartTime) = 0;
+  virtual void addSpanUpdateName(tracing::SpanId spanId, kj::ConstString operationName) {}
 
   virtual void addException(const tracing::InvocationSpanContext& context,
       kj::Date timestamp,
@@ -149,6 +150,7 @@ class WorkerTracer final: public BaseTracer {
       tracing::SpanId parentSpanId,
       kj::ConstString operationName,
       kj::Date startTime) override;
+  void addSpanUpdateName(tracing::SpanId spanId, kj::ConstString operationName) override;
   void addSpanClose(tracing::SpanEndData&& span, kj::Maybe<kj::Date> maybeStartTime) override;
   void addException(const tracing::InvocationSpanContext& context,
       kj::Date timestamp,
@@ -221,6 +223,9 @@ class SpanSubmitter: public kj::Refcounted {
     return submitSpanOpen(spanId, parentSpanId, kj::mv(operationName), startTime);
   }
 
+  // Called when the span's operation name is updated after it was opened.
+  virtual void submitSpanUpdateName(tracing::SpanId spanId, kj::ConstString operationName) {}
+
   // Called when a span is closed. Together with the open data, provides all span information.
   virtual void submitSpanClose(
       tracing::SpanId spanId, kj::Date startTime, kj::Date endTime, Span::TagMap&& tags) = 0;
@@ -260,6 +265,7 @@ class UserSpanObserver final: public SpanObserver {
   kj::Own<SpanObserver> newChild() override;
   kj::Own<SpanObserver> newChildFromUserCode() override;
   void onOpen(kj::ConstString operationName, kj::Date startTime) override;
+  void onUpdateName(kj::ConstString operationName) override;
   void onClose(kj::Date endTime, Span::TagMap&& tags, kj::Vector<Span::Log>&& logs) override;
   kj::Date getTime() override;
   kj::Maybe<tracing::SpanContext> toSpanContext() override;

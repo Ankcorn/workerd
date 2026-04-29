@@ -140,8 +140,22 @@ class Tracing: public jsg::Object {
       const jsg::TypeHandler<jsg::Ref<user_tracing::Span>>& spanHandler,
       const jsg::TypeHandler<jsg::Promise<jsg::Value>>& valuePromiseHandler);
 
+  struct BindingSpanOptions {
+    jsg::Optional<kj::String> name;
+    jsg::Optional<jsg::Dict<jsg::Value>> attributes;
+
+    JSG_STRUCT(name, attributes);
+  };
+
+  // Enriches the caller's jsRpcSession user span with a name and/or attributes.
+  // Only exposed when the binding config carries a spanEnrichmentPolicy (checked at
+  // construction time via allowBindingSpanEnrichment on the current IncomingRequest).
+  // Last call before the RPC method returns wins.
+  void setBindingSpan(jsg::Lock& js, BindingSpanOptions options);
+
   JSG_RESOURCE_TYPE(Tracing) {
     JSG_METHOD(enterSpan);
+    JSG_METHOD(setBindingSpan);
 
     // Use the _NAMED variant so the property ends up as `tracing.Span` rather than
     // `tracing["user_tracing::Span"]`.
@@ -181,4 +195,4 @@ kj::Own<jsg::modules::ModuleBundle> getInternalTracingModuleBundle(auto featureF
 
 }  // namespace workerd::api
 
-#define EW_TRACING_ISOLATE_TYPES api::Tracing, api::user_tracing::Span
+#define EW_TRACING_ISOLATE_TYPES api::Tracing, api::user_tracing::Span, api::Tracing::BindingSpanOptions

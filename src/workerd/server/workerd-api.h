@@ -93,13 +93,32 @@ class WorkerdApi final: public Worker::Api {
         return Json{.text = kj::str(text)};
       }
     };
+    struct SpanEnrichmentPolicy {
+      kj::Array<kj::String> allowedAttrPrefixes;
+      kj::Array<kj::String> allowedNames;
+
+      SpanEnrichmentPolicy clone() const {
+        return SpanEnrichmentPolicy{
+          .allowedAttrPrefixes = KJ_MAP(s, allowedAttrPrefixes) { return kj::str(s); },
+          .allowedNames = KJ_MAP(s, allowedNames) { return kj::str(s); },
+        };
+      }
+    };
+
     struct Fetcher {
       uint channel;
       bool requiresHost;
       bool isInHouse;
+      kj::Maybe<SpanEnrichmentPolicy> spanEnrichmentPolicy;
 
       Fetcher clone() const {
-        return *this;
+        return Fetcher{
+          .channel = channel,
+          .requiresHost = requiresHost,
+          .isInHouse = isInHouse,
+          .spanEnrichmentPolicy = spanEnrichmentPolicy.map(
+              [](const SpanEnrichmentPolicy& p) { return p.clone(); }),
+        };
       }
     };
     struct LoopbackServiceStub {

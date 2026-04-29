@@ -230,8 +230,27 @@ struct ServiceDesignator {
     # A JSON-encoded value.
   }
 
+  spanEnrichmentPolicy @4 :SpanEnrichmentPolicy;
+  # Caller-side policy governing binding span enrichment. When present, the target service
+  # is permitted to enrich the jsRpcSession user span via ctx.tracing.setBindingSpan().
+  # Absent by default (enrichment disabled). Only honoured on jsrpc-transport bindings.
+  # This is an internal/EWC-set field; not exposed via wrangler or the dashboard.
+
   # TODO(someday): Options to specify which event types are allowed.
   # TODO(someday): Allow adding an outgoing middleware stack here (see TODO in Service, above).
+}
+
+struct SpanEnrichmentPolicy {
+  # Controls what a callee-side service is allowed to write into the caller's user span
+  # via ctx.tracing.setBindingSpan(). The caller's runtime enforces this policy on the
+  # return path before applying any enrichment to the span.
+  allowedAttrPrefixes @0 :List(Text);
+  # Attribute keys are accepted only when they start with one of these prefixes.
+  # e.g. ["gen_ai.", "cf.aig."]
+
+  allowedNames @1 :List(Text);
+  # The callee's requested span name is accepted only when it appears in this list.
+  # e.g. ["ai_gateway.run"]
 }
 
 struct Worker {

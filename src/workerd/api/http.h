@@ -263,10 +263,20 @@ class Fetcher: public JsRpcClientProvider {
   // URL that has no protocol or host.
   //
   // See pipeline.capnp or request-context.h for an explanation of `isInHouse`.
-  explicit Fetcher(uint channel, RequiresHostAndProtocol requiresHost, bool isInHouse = false)
+
+  struct SpanEnrichmentPolicy {
+    // Caller-side policy governing what a callee may write into the caller's user span via
+    // ctx.tracing.setBindingSpan(). Absent means enrichment is disabled for this binding.
+    kj::Array<kj::String> allowedAttrPrefixes;
+    kj::Array<kj::String> allowedNames;
+  };
+
+  explicit Fetcher(uint channel, RequiresHostAndProtocol requiresHost, bool isInHouse = false,
+      kj::Maybe<SpanEnrichmentPolicy> spanEnrichmentPolicy = kj::none)
       : channelOrClientFactory(channel),
         requiresHost(requiresHost),
-        isInHouse(isInHouse) {}
+        isInHouse(isInHouse),
+        spanEnrichmentPolicy(kj::mv(spanEnrichmentPolicy)) {}
 
   // Create a Fetcher bound to an IoChannelFactory::SubrequestChannel object rather than a numeric
   // channel. This Fetcher will inherently be bound to the current I/O context.
@@ -437,7 +447,7 @@ class Fetcher: public JsRpcClientProvider {
     return getRpcMethod(js, kj::mv(name));
   }
 
-  rpc::JsRpcTarget::Client getClientForOneCall(
+  JsRpcClientProvider::ClientForOneCall getClientForOneCall(
       jsg::Lock& js, kj::Vector<kj::StringPtr>& path) override;
 
   JSG_RESOURCE_TYPE(Fetcher, CompatibilityFlags::Reader flags) {
@@ -527,6 +537,7 @@ class Fetcher: public JsRpcClientProvider {
       channelOrClientFactory;
   RequiresHostAndProtocol requiresHost;
   bool isInHouse;
+  kj::Maybe<SpanEnrichmentPolicy> spanEnrichmentPolicy;
 };
 
 // Type of the second parameter to Request's constructor. Also the type of the second parameter

@@ -1756,6 +1756,12 @@ class SequentialSpanSubmitter final: public SpanSubmitter {
     return submitted;
   }
 
+  void submitSpanUpdateName(tracing::SpanId spanId, kj::ConstString operationName) override {
+    weakTracer->runIfAlive([&](BaseTracer& tracer) {
+      tracer.addSpanUpdateName(spanId, kj::mv(operationName));
+    });
+  }
+
   tracing::SpanId makeSpanId() override {
     return tracing::SpanId(nextSpanId++);
   }
@@ -3866,8 +3872,21 @@ static kj::Maybe<WorkerdApi::Global> createBinding(kj::StringPtr workerName,
       uint channel = static_cast<uint>(subrequestChannels.size()) +
           IoContext::SPECIAL_SUBREQUEST_CHANNEL_COUNT;
       subrequestChannels.add(FutureSubrequestChannel{binding.getService(), kj::mv(errorContext)});
-      return makeGlobal(
-          Global::Fetcher{.channel = channel, .requiresHost = true, .isInHouse = false});
+      kj::Maybe<Global::SpanEnrichmentPolicy> maybePolicy;
+      auto svc = binding.getService();
+      if (svc.hasSpanEnrichmentPolicy()) {
+        auto p = svc.getSpanEnrichmentPolicy();
+        maybePolicy = Global::SpanEnrichmentPolicy{
+          .allowedAttrPrefixes = KJ_MAP(s, p.getAllowedAttrPrefixes()) { return kj::str(s); },
+          .allowedNames = KJ_MAP(s, p.getAllowedNames()) { return kj::str(s); },
+        };
+      }
+      return makeGlobal(Global::Fetcher{
+        .channel = channel,
+        .requiresHost = true,
+        .isInHouse = false,
+        .spanEnrichmentPolicy = kj::mv(maybePolicy),
+      });
     }
 
     case config::Worker::Binding::DURABLE_OBJECT_NAMESPACE: {

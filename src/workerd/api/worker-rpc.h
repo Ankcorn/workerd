@@ -201,7 +201,21 @@ class JsRpcClientProvider: public jsg::Object {
   //
   // If this isn't the root object (i.e. this is a JsRpcProperty), the property path starting from
   // the root object will be appended to `path`.
-  virtual rpc::JsRpcTarget::Client getClientForOneCall(
+  //
+  // Returns the RPC client and, optionally, a TraceContext containing the user span opened for
+  // this call. The TraceContext is present only for Fetcher-backed stubs (i.e. direct service
+  // bindings); it is absent for transient RPC targets (stubs returned from RPC calls). The caller
+  // is responsible for applying any BindingSpanEnrichment from CallResults to this TraceContext
+  // before it is destroyed.
+  struct ClientForOneCall {
+    rpc::JsRpcTarget::Client client;
+    kj::Maybe<TraceContext> traceContext;
+    // Raw pointer to a TraceContext that has already been attached to the WorkerInterface.
+    // Only set when the TraceContext is owned elsewhere (attached via .attach()); in that case
+    // traceContext is kj::none. callImpl uses this to write pending enrichment.
+    TraceContext* attachedTraceContext = nullptr;
+  };
+  virtual ClientForOneCall getClientForOneCall(
       jsg::Lock& js, kj::Vector<kj::StringPtr>& path) = 0;
 };
 
@@ -234,7 +248,7 @@ class JsRpcPromise: public JsRpcClientProvider {
   void resolve(jsg::Lock& js, jsg::JsValue result);
   void dispose(jsg::Lock& js);
 
-  rpc::JsRpcTarget::Client getClientForOneCall(
+  ClientForOneCall getClientForOneCall(
       jsg::Lock& js, kj::Vector<kj::StringPtr>& path) override;
 
   // Expect that the call is itself going to return a function... and call that.
@@ -313,7 +327,7 @@ class JsRpcProperty: public JsRpcClientProvider {
       : parent(kj::mv(parent)),
         name(kj::mv(name)) {}
 
-  rpc::JsRpcTarget::Client getClientForOneCall(
+  ClientForOneCall getClientForOneCall(
       jsg::Lock& js, kj::Vector<kj::StringPtr>& path) override;
 
   // Call the property as a method.
@@ -391,7 +405,7 @@ class JsRpcStub: public JsRpcClientProvider {
 
   rpc::JsRpcTarget::Client getClient();
 
-  rpc::JsRpcTarget::Client getClientForOneCall(
+  ClientForOneCall getClientForOneCall(
       jsg::Lock& js, kj::Vector<kj::StringPtr>& path) override;
 
   jsg::Ref<JsRpcStub> dup(jsg::Lock& js);
@@ -468,12 +482,14 @@ class JsRpcSessionCustomEvent final: public WorkerInterface::CustomEvent {
  public:
   JsRpcSessionCustomEvent(uint16_t typeId,
       kj::Maybe<kj::String> wrapperModule = kj::none,
+      bool allowBindingSpanEnrichment = false,
       kj::PromiseFulfillerPair<rpc::JsRpcTarget::Client> paf =
           kj::newPromiseAndFulfiller<rpc::JsRpcTarget::Client>())
       : capFulfiller(kj::mv(paf.fulfiller)),
         clientCap(kj::mv(paf.promise)),
         typeId(typeId),
-        wrapperModule(kj::mv(wrapperModule)) {}
+        wrapperModule(kj::mv(wrapperModule)),
+        allowBindingSpanEnrichment(allowBindingSpanEnrichment) {}
 
   ~JsRpcSessionCustomEvent() noexcept(false) {
     if (capFulfiller->isWaiting()) {
@@ -514,6 +530,10 @@ class JsRpcSessionCustomEvent final: public WorkerInterface::CustomEvent {
   void failed(const kj::Exception& e) override {
     capFulfiller->reject(e.clone());
   }
+
+  // Whether the callee is permitted to call ctx.tracing.setBindingSpan().
+  // Set from the binding config's spanEnrichmentPolicy at dispatch time.
+  bool allowBindingSpanEnrichment = false;
 
   // Event ID for jsRpcSession.
   //
