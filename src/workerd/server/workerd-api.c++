@@ -597,11 +597,18 @@ static v8::Local<v8::Value> createBindingValue(JsgWorkerdIsolate::Lock& lock,
     }
 
     KJ_CASE_ONEOF(pipeline, Global::Fetcher) {
+      kj::Maybe<api::Fetcher::SpanEnrichmentPolicy> apiPolicy;
+      KJ_IF_SOME(p, pipeline.spanEnrichmentPolicy) {
+        apiPolicy = api::Fetcher::SpanEnrichmentPolicy{
+          .allowedAttrPrefixes = KJ_MAP(s, p.allowedAttrPrefixes) { return kj::str(s); },
+          .allowedNames = KJ_MAP(s, p.allowedNames) { return kj::str(s); },
+        };
+      }
       value = lock.wrap(context,
           lock.alloc<api::Fetcher>(pipeline.channel,
               pipeline.requiresHost ? api::Fetcher::RequiresHostAndProtocol::YES
                                     : api::Fetcher::RequiresHostAndProtocol::NO,
-              pipeline.isInHouse));
+              pipeline.isInHouse, kj::mv(apiPolicy)));
     }
 
     KJ_CASE_ONEOF(loopback, Global::LoopbackServiceStub) {

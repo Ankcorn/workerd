@@ -368,13 +368,13 @@ void JsRpcPromise::dispose(jsg::Lock& js) {
 static rpc::JsRpcTarget::Client makeJsRpcTargetForSingleLoopbackCall(
     jsg::Lock& js, jsg::JsObject obj);
 
-rpc::JsRpcTarget::Client JsRpcPromise::getClientForOneCall(
+JsRpcClientProvider::ClientForOneCall JsRpcPromise::getClientForOneCall(
     jsg::Lock& js, kj::Vector<kj::StringPtr>& path) {
   // (Don't extend `path` because we're the root.)
 
   KJ_SWITCH_ONEOF(state) {
     KJ_CASE_ONEOF(pending, Pending) {
-      return pending.pipeline->getCallPipeline();
+      return {.client = pending.pipeline->getCallPipeline()};
     }
     KJ_CASE_ONEOF(resolved, Resolved) {
       // Dereference `ctxCheck` just to verify we're running in the correct context. (If not,
@@ -399,7 +399,7 @@ rpc::JsRpcTarget::Client JsRpcPromise::getClientForOneCall(
       // The easiest way to make this all just work is... to actually wrap the value in a one-off
       // RPC stub, and make a real RPC on it.
 
-      return js.withinHandleScope([&]() -> rpc::JsRpcTarget::Client {
+      return {.client = js.withinHandleScope([&]() -> rpc::JsRpcTarget::Client {
         auto value = jsg::JsValue(resolved.result.getHandle(js));
 
         KJ_IF_SOME(obj, value.tryCast<jsg::JsObject>()) {
@@ -413,16 +413,16 @@ rpc::JsRpcTarget::Client JsRpcPromise::getClientForOneCall(
         } else {
           JSG_FAIL_REQUIRE(TypeError, "Can't pipeline on RPC that did not return an object.");
         }
-      });
+      })};
     }
     KJ_CASE_ONEOF(disposed, Disposed) {
-      return JSG_KJ_EXCEPTION(FAILED, Error, "RPC promise used after being disposed.");
+      return {.client = JSG_KJ_EXCEPTION(FAILED, Error, "RPC promise used after being disposed.")};
     }
   }
   KJ_UNREACHABLE;
 }
 
-rpc::JsRpcTarget::Client JsRpcProperty::getClientForOneCall(
+JsRpcClientProvider::ClientForOneCall JsRpcProperty::getClientForOneCall(
     jsg::Lock& js, kj::Vector<kj::StringPtr>& path) {
   auto result = parent->getClientForOneCall(js, path);
   path.add(name);
@@ -470,7 +470,8 @@ JsRpcPromiseAndPipeline callImpl(jsg::Lock& js,
       // `path` will be filled in with the path of property names leading from the stub represented by
       // `client` to the specific property / method that we're trying to invoke.
       kj::Vector<kj::StringPtr> path;
-      auto client = parent.getClientForOneCall(js, path);
+      auto [client, maybeTraceContext, sessionSpan, enrichmentPolicy] =
+          parent.getClientForOneCall(js, path);
 
       auto& ioContext = IoContext::current();
 
@@ -579,9 +580,58 @@ JsRpcPromiseAndPipeline callImpl(jsg::Lock& js,
       // RemotePromise lets us consume its pipeline and promise portions independently; we consume
       // the promise here and we consume the pipeline below, both via kj::mv().
       auto jsPromise = ioContext.awaitIo(js, kj::mv(callResult),
-          [weakRef = kj::atomicAddRef(*weakRef), resultStreamSink = kj::mv(resultStreamSink)](
-              jsg::Lock& js,
+          [weakRef = kj::atomicAddRef(*weakRef), resultStreamSink = kj::mv(resultStreamSink),
+              maybeTraceContext = kj::mv(maybeTraceContext), sessionSpan,
+              policyPtr =
+                  enrichmentPolicy.map([](TraceContext::SpanEnrichmentPolicy& p) {
+        return &p;
+      }).orDefault(nullptr)](jsg::Lock& js,
               capnp::Response<rpc::JsRpcTarget::CallResults> response) mutable -> jsg::Value {
+        // Apply any BindingSpanEnrichment directly to the jsRpcSession SpanBuilder.
+        // sessionSpan and policyPtr are owned by JsRpcSessionCustomEvent, valid for the session.
+        if (sessionSpan != nullptr && policyPtr != nullptr && response.hasBindingSpanEnrichment()) {
+          auto enrichment = response.getBindingSpanEnrichment();
+          auto& policy = *policyPtr;
+          // Rename: allowed if in allowedNames list.
+          auto name = enrichment.getName();
+          if (name.size() > 0) {
+            for (auto& allowed: policy.allowedNames) {
+              if (name == allowed.asPtr()) {
+                sessionSpan->setOperationName(kj::ConstString(kj::str(name)));
+                break;
+              }
+            }
+          }
+          // Attributes: allowed if key starts with an allowedAttrPrefixes entry.
+          for (auto attr: enrichment.getAttributes()) {
+            auto key = attr.getName();
+            bool keyAllowed = false;
+            for (auto& prefix: policy.allowedAttrPrefixes) {
+              if (key.startsWith(prefix)) {
+                keyAllowed = true;
+                break;
+              }
+            }
+            if (!keyAllowed) continue;
+            auto vals = attr.getValue();
+            if (vals.size() == 0) continue;
+            auto val = vals[0];
+            SpanBuilder::TagInitValue tagVal;
+            if (val.isString()) {
+              tagVal = kj::str(val.getString());
+            } else if (val.isBool()) {
+              tagVal = val.getBool();
+            } else if (val.isInt64()) {
+              tagVal = val.getInt64();
+            } else if (val.isFloat64()) {
+              tagVal = val.getFloat64();
+            } else {
+              continue;
+            }
+            sessionSpan->setTag(kj::ConstString(kj::str(key)), kj::mv(tagVal));
+          }
+        }
+
         auto jsResult = deserializeRpcReturnValue(js, response, resultStreamSink);
 
         if (weakRef->disposed) {
@@ -817,10 +867,10 @@ rpc::JsRpcTarget::Client JsRpcStub::getClient() {
   }
 }
 
-rpc::JsRpcTarget::Client JsRpcStub::getClientForOneCall(
+JsRpcClientProvider::ClientForOneCall JsRpcStub::getClientForOneCall(
     jsg::Lock& js, kj::Vector<kj::StringPtr>& path) {
   // (Don't extend `path` because we're the root.)
-  return getClient();
+  return {.client = getClient()};
 }
 
 jsg::Ref<JsRpcStub> JsRpcStub::dup(jsg::Lock& js) {
@@ -1209,6 +1259,39 @@ class JsRpcTargetBase: public rpc::JsRpcTarget::Server {
 
         KJ_IF_SOME(ss, paramsStreamSink) {
           results.setParamsStreamSink(kj::mv(ss));
+        }
+
+        // If the callee called ctx.tracing.setBindingSpan(), populate the enrichment field
+        // on CallResults so the caller's runtime can apply it to the user span.
+        if (IoContext::hasCurrent()) {
+          KJ_IF_SOME(enrichment, IoContext::current().takePendingBindingSpanEnrichment()) {
+            auto enrichBuilder = results.initBindingSpanEnrichment();
+            enrichBuilder.setName(enrichment.name);
+            auto attrsList = enrichBuilder.initAttributes(enrichment.attributes.size());
+            for (auto i: kj::indices(enrichment.attributes)) {
+              auto& attr = enrichment.attributes[i];
+              auto attrBuilder = attrsList[i];
+              attrBuilder.setName(attr.key);
+              auto valueList = attrBuilder.initValue(1);
+              KJ_SWITCH_ONEOF(attr.value) {
+                KJ_CASE_ONEOF(s, kj::StringPtr) {
+                  valueList[0].setString(s);
+                }
+                KJ_CASE_ONEOF(s, kj::String) {
+                  valueList[0].setString(s);
+                }
+                KJ_CASE_ONEOF(b, bool) {
+                  valueList[0].setBool(b);
+                }
+                KJ_CASE_ONEOF(i64, int64_t) {
+                  valueList[0].setInt64(i64);
+                }
+                KJ_CASE_ONEOF(d, double) {
+                  valueList[0].setFloat64(d);
+                }
+              }
+            }
+          }
         }
 
         // paramDisposalGroup will be destroyed when we return (or when this lambda is destroyed
@@ -2164,6 +2247,10 @@ kj::Promise<WorkerInterface::CustomEvent::Result> JsRpcSessionCustomEvent::run(
     kj::TaskSet& waitUntilTasks,
     bool isDynamicDispatch) {
   IoContext& ioctx = incomingRequest->getContext();
+
+  // Propagate the enrichment permission from the binding config to the IncomingRequest so that
+  // the callee's ctx.tracing.setBindingSpan() implementation can check it.
+  incomingRequest->allowBindingSpanEnrichment = allowBindingSpanEnrichment;
 
   incomingRequest->delivered();
 

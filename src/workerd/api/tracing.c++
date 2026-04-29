@@ -270,4 +270,55 @@ v8::Local<v8::Value> Tracing::enterSpan(jsg::Lock& js,
   }
 }
 
+void Tracing::setBindingSpan(jsg::Lock& js, BindingSpanOptions options) {
+  // Only exposed when the binding config grants the callee permission to enrich the caller's
+  // user span. Check the current IncomingRequest's allowBindingSpanEnrichment flag.
+  if (!IoContext::hasCurrent()) return;
+  auto& ioCtx = IoContext::current();
+  if (!ioCtx.hasCurrentIncomingRequest()) return;
+  // Guard: only exposed when the binding config grants enrichment permission.
+  if (!ioCtx.allowBindingSpanEnrichment()) return;
+
+  // Build the pending enrichment (last-caller-wins: just overwrite).
+  IoContext::IncomingRequest::PendingSpanEnrichment enrichment;
+
+  KJ_IF_SOME(n, options.name) {
+    enrichment.name = kj::mv(n);
+  }
+
+  KJ_IF_SOME(attrs, options.attributes) {
+    kj::Vector<IoContext_IncomingRequest::PendingSpanEnrichment::Attribute> attrVec;
+    for (auto& field: attrs.fields) {
+      auto& key = field.name;
+      v8::Local<v8::Value> handle = field.value.getHandle(js);
+
+      SpanBuilder::TagInitValue tagVal;
+      if (handle->IsString()) {
+        // We copy the string out so it outlives the JS stack frame.
+        tagVal = kj::str(jsg::JsValue(handle).toString(js));
+      } else if (handle->IsBoolean()) {
+        tagVal = handle->BooleanValue(js.v8Isolate);
+      } else if (handle->IsNumber()) {
+        // Represent as int64 if integral, float64 otherwise — matches the capnp TagValue union.
+        double d = handle->NumberValue(js.v8Context()).FromMaybe(0.0);
+        if (d == static_cast<double>(static_cast<int64_t>(d))) {
+          tagVal = static_cast<int64_t>(d);
+        } else {
+          tagVal = d;
+        }
+      } else {
+        // Skip unsupported types (object, array, null, undefined, etc.).
+        continue;
+      }
+      attrVec.add(IoContext::IncomingRequest::PendingSpanEnrichment::Attribute{
+        .key = kj::str(key),
+        .value = kj::mv(tagVal),
+      });
+    }
+    enrichment.attributes = attrVec.releaseAsArray();
+  }
+
+  ioCtx.setPendingBindingSpanEnrichment(kj::mv(enrichment));
+}
+
 }  // namespace workerd::api

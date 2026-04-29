@@ -1238,6 +1238,15 @@ inline SpanBuilder SpanBuilder::newChild(
 // TraceContext to keep track of user tracing/existing tracing better
 class TraceContext {
  public:
+  // Caller-side policy governing binding span enrichment for this call.
+  // Populated by Fetcher::getClientWithTracing() when the binding config carries a policy.
+  // Read by the callImpl response lambda to filter enrichment from CallResults.
+  struct SpanEnrichmentPolicy {
+    kj::Array<kj::String> allowedAttrPrefixes;
+    kj::Array<kj::String> allowedNames;
+  };
+  kj::Maybe<SpanEnrichmentPolicy> spanEnrichmentPolicy;
+
   TraceContext(): span(nullptr), userSpan(nullptr) {}
   TraceContext(SpanBuilder span, SpanBuilder userSpan)
       : span(kj::mv(span)),

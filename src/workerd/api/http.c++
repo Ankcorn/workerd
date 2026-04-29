@@ -2118,26 +2118,36 @@ kj::Maybe<jsg::Ref<JsRpcProperty>> Fetcher::getRpcMethodInternal(jsg::Lock& js, 
   return js.alloc<JsRpcProperty>(JSG_THIS, kj::mv(name));
 }
 
-rpc::JsRpcTarget::Client Fetcher::getClientForOneCall(
+JsRpcClientProvider::ClientForOneCall Fetcher::getClientForOneCall(
     jsg::Lock& js, kj::Vector<kj::StringPtr>& path) {
   auto& ioContext = IoContext::current();
   auto [worker, sessionSpan] = getJsRpcClient(ioContext);
   auto event = kj::heap<api::JsRpcSessionCustomEvent>(
-      JsRpcSessionCustomEvent::WORKER_RPC_EVENT_TYPE, kj::mv(sessionSpan));
+      JsRpcSessionCustomEvent::WORKER_RPC_EVENT_TYPE,
+      kj::mv(sessionSpan),
+      /*wrapperModule=*/kj::none,
+      /*allowBindingSpanEnrichment=*/spanEnrichmentPolicy != kj::none);
 
+  // Copy the enrichment policy onto the event so callImpl can filter CallResults against it.
+  KJ_IF_SOME(p, spanEnrichmentPolicy) {
+    event->spanEnrichmentPolicy = TraceContext::SpanEnrichmentPolicy{
+      .allowedAttrPrefixes = KJ_MAP(s, p.allowedAttrPrefixes) { return kj::str(s); },
+      .allowedNames = KJ_MAP(s, p.allowedNames) { return kj::str(s); },
+    };
+  }
+
+  // Expose a pointer to the event's span and policy for callImpl's enrichment application.
+  // The event is kept alive by addTask below, so these pointers are valid for the session.
+  auto* spanPtr = &event->jsRpcSessionSpan;
   auto result = event->getCap();
+  kj::Maybe<TraceContext::SpanEnrichmentPolicy&> policyRef = event->spanEnrichmentPolicy;
 
-  // Arrange to cancel the CustomEvent if our I/O context is destroyed. But otherwise, we don't
-  // actually care about the result of the event. If it throws, the membrane will already have
-  // propagated the exception to any RPC calls that we're waiting on, so we even ignore errors
-  // here -- otherwise they'll end up logged as "uncaught exceptions" even if they were, in fact,
-  // caught elsewhere.
-  ioContext.addTask(worker->customEvent(kj::mv(event)).attach(kj::mv(worker)).then([](auto&&) {
-  }, [](kj::Exception&&) {}));
+  ioContext.addTask(worker->customEvent(kj::mv(event)).attach(kj::mv(worker)).then(
+      [](auto&&) {}, [](kj::Exception&&) {}));
 
   // (Don't extend `path` because we're the root.)
-
-  return result;
+  return {.client = kj::mv(result), .traceContext = kj::none,
+          .sessionSpan = spanPtr, .enrichmentPolicy = kj::mv(policyRef)};
 }
 
 void Fetcher::serialize(jsg::Lock& js, jsg::Serializer& serializer) {
@@ -2454,15 +2464,28 @@ Fetcher::JsRpcClient Fetcher::getJsRpcClient(IoContext& ioContext) {
 
 Fetcher::ClientWithTracing Fetcher::getClientWithTracing(
     IoContext& ioContext, kj::Maybe<kj::String> cfStr, kj::ConstString operationName) {
+  // Helper: copy spanEnrichmentPolicy onto a TraceContext so the callImpl response lambda
+  // can use it to filter BindingSpanEnrichment from CallResults.
+  auto attachPolicy = [&](TraceContext& tc) {
+    KJ_IF_SOME(p, spanEnrichmentPolicy) {
+      tc.spanEnrichmentPolicy = TraceContext::SpanEnrichmentPolicy{
+        .allowedAttrPrefixes = KJ_MAP(s, p.allowedAttrPrefixes) { return kj::str(s); },
+        .allowedNames = KJ_MAP(s, p.allowedNames) { return kj::str(s); },
+      };
+    }
+  };
+
   KJ_SWITCH_ONEOF(channelOrClientFactory) {
     KJ_CASE_ONEOF(channel, uint) {
       // For channels, create trace context
       auto traceContext = ioContext.makeUserTraceSpan(kj::mv(operationName));
+      attachPolicy(traceContext);
       auto client = ioContext.getSubrequestChannel(channel, isInHouse, kj::mv(cfStr), traceContext);
       return ClientWithTracing{kj::mv(client), kj::mv(traceContext)};
     }
     KJ_CASE_ONEOF(channel, IoOwn<IoChannelFactory::SubrequestChannel>) {
       auto traceContext = ioContext.makeUserTraceSpan(kj::mv(operationName));
+      attachPolicy(traceContext);
       auto client = ioContext.getSubrequest(
           [&](TraceContext& tracing, IoChannelFactory& ioChannelFactory) {
         return channel->startRequest({.cfBlobJson = kj::mv(cfStr),

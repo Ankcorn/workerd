@@ -201,8 +201,19 @@ class JsRpcClientProvider: public jsg::Object {
   //
   // If this isn't the root object (i.e. this is a JsRpcProperty), the property path starting from
   // the root object will be appended to `path`.
-  virtual rpc::JsRpcTarget::Client getClientForOneCall(
-      jsg::Lock& js, kj::Vector<kj::StringPtr>& path) = 0;
+  //
+  // Returns the RPC client and, optionally, a pointer to the jsRpcSession SpanBuilder and policy.
+  // The span is owned by JsRpcSessionCustomEvent (lives for the session). Present only for
+  // Fetcher-backed stubs; absent for transient RPC targets. callImpl writes enrichment directly.
+  struct ClientForOneCall {
+    rpc::JsRpcTarget::Client client;
+    kj::Maybe<TraceContext> traceContext;
+    // Direct pointer to the event-owned jsRpcSession span + enrichment policy.
+    // Valid for the session lifetime (until JsRpcSessionCustomEvent is destroyed).
+    SpanBuilder* sessionSpan = nullptr;
+    kj::Maybe<TraceContext::SpanEnrichmentPolicy&> enrichmentPolicy = kj::none;
+  };
+  virtual ClientForOneCall getClientForOneCall(jsg::Lock& js, kj::Vector<kj::StringPtr>& path) = 0;
 };
 
 class JsRpcProperty;
@@ -234,8 +245,7 @@ class JsRpcPromise: public JsRpcClientProvider {
   void resolve(jsg::Lock& js, jsg::JsValue result);
   void dispose(jsg::Lock& js);
 
-  rpc::JsRpcTarget::Client getClientForOneCall(
-      jsg::Lock& js, kj::Vector<kj::StringPtr>& path) override;
+  ClientForOneCall getClientForOneCall(jsg::Lock& js, kj::Vector<kj::StringPtr>& path) override;
 
   // Expect that the call is itself going to return a function... and call that.
   jsg::Ref<JsRpcPromise> call(const v8::FunctionCallbackInfo<v8::Value>& args);
@@ -313,8 +323,7 @@ class JsRpcProperty: public JsRpcClientProvider {
       : parent(kj::mv(parent)),
         name(kj::mv(name)) {}
 
-  rpc::JsRpcTarget::Client getClientForOneCall(
-      jsg::Lock& js, kj::Vector<kj::StringPtr>& path) override;
+  ClientForOneCall getClientForOneCall(jsg::Lock& js, kj::Vector<kj::StringPtr>& path) override;
 
   // Call the property as a method.
   jsg::Ref<JsRpcPromise> call(const v8::FunctionCallbackInfo<v8::Value>& args);
@@ -391,8 +400,7 @@ class JsRpcStub: public JsRpcClientProvider {
 
   rpc::JsRpcTarget::Client getClient();
 
-  rpc::JsRpcTarget::Client getClientForOneCall(
-      jsg::Lock& js, kj::Vector<kj::StringPtr>& path) override;
+  ClientForOneCall getClientForOneCall(jsg::Lock& js, kj::Vector<kj::StringPtr>& path) override;
 
   jsg::Ref<JsRpcStub> dup(jsg::Lock& js);
   void dispose();
@@ -469,11 +477,13 @@ class JsRpcSessionCustomEvent final: public WorkerInterface::CustomEvent {
   JsRpcSessionCustomEvent(uint16_t typeId,
       SpanBuilder jsRpcSessionSpan = SpanBuilder(nullptr),
       kj::Maybe<kj::String> wrapperModule = kj::none,
+      bool allowBindingSpanEnrichment = false,
       kj::PromiseFulfillerPair<rpc::JsRpcTarget::Client> paf =
           kj::newPromiseAndFulfiller<rpc::JsRpcTarget::Client>())
       : capFulfiller(kj::mv(paf.fulfiller)),
         clientCap(kj::mv(paf.promise)),
         typeId(typeId),
+        allowBindingSpanEnrichment(allowBindingSpanEnrichment),
         jsRpcSessionSpan(kj::mv(jsRpcSessionSpan)),
         wrapperModule(kj::mv(wrapperModule)) {}
 
@@ -517,6 +527,18 @@ class JsRpcSessionCustomEvent final: public WorkerInterface::CustomEvent {
     capFulfiller->reject(e.clone());
   }
 
+  // Whether the callee is permitted to call ctx.tracing.setJsrpcSessionAttributes().
+  bool allowBindingSpanEnrichment = false;
+
+  // Caller-side enrichment policy, populated by Fetcher when binding config carries it.
+  // callImpl reads this to filter BindingSpanEnrichment from CallResults.
+  kj::Maybe<TraceContext::SpanEnrichmentPolicy> spanEnrichmentPolicy;
+
+  // Span representing this jsRpc session. Created before startRequest() so the callee can
+  // reference its ID for trace context propagation. Lives until this event is destroyed
+  // (i.e. until the session ends), which gives the correct span lifetime.
+  SpanBuilder jsRpcSessionSpan;
+
   // Event ID for jsRpcSession.
   //
   // Similar to WebSocket hibernation, we define this event ID in the internal codebase, but since
@@ -531,11 +553,6 @@ class JsRpcSessionCustomEvent final: public WorkerInterface::CustomEvent {
   // limited return type.
   kj::Maybe<rpc::JsRpcTarget::Client> clientCap;
   uint16_t typeId;
-  // Span representing this jsRpc session. Created before startRequest() so the callee can
-  // reference its ID for trace context propagation. Lives until this event is destroyed
-  // (i.e., until the session ends), which gives the correct span lifetime.
-  SpanBuilder jsRpcSessionSpan;
-
   kj::Maybe<kj::String> wrapperModule;
 
   class ServerTopLevelMembrane;
