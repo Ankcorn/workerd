@@ -467,12 +467,14 @@ class RpcStubDisposalGroup {
 class JsRpcSessionCustomEvent final: public WorkerInterface::CustomEvent {
  public:
   JsRpcSessionCustomEvent(uint16_t typeId,
+      SpanBuilder jsRpcSessionSpan = SpanBuilder(nullptr),
       kj::Maybe<kj::String> wrapperModule = kj::none,
       kj::PromiseFulfillerPair<rpc::JsRpcTarget::Client> paf =
           kj::newPromiseAndFulfiller<rpc::JsRpcTarget::Client>())
       : capFulfiller(kj::mv(paf.fulfiller)),
         clientCap(kj::mv(paf.promise)),
         typeId(typeId),
+        jsRpcSessionSpan(kj::mv(jsRpcSessionSpan)),
         wrapperModule(kj::mv(wrapperModule)) {}
 
   ~JsRpcSessionCustomEvent() noexcept(false) {
@@ -529,6 +531,10 @@ class JsRpcSessionCustomEvent final: public WorkerInterface::CustomEvent {
   // limited return type.
   kj::Maybe<rpc::JsRpcTarget::Client> clientCap;
   uint16_t typeId;
+  // Span representing this jsRpc session. Created before startRequest() so the callee can
+  // reference its ID for trace context propagation. Lives until this event is destroyed
+  // (i.e., until the session ends), which gives the correct span lifetime.
+  SpanBuilder jsRpcSessionSpan;
 
   kj::Maybe<kj::String> wrapperModule;
 

@@ -2121,9 +2121,9 @@ kj::Maybe<jsg::Ref<JsRpcProperty>> Fetcher::getRpcMethodInternal(jsg::Lock& js, 
 rpc::JsRpcTarget::Client Fetcher::getClientForOneCall(
     jsg::Lock& js, kj::Vector<kj::StringPtr>& path) {
   auto& ioContext = IoContext::current();
-  auto worker = getClient(ioContext, kj::none, "jsRpcSession"_kjc);
+  auto [worker, sessionSpan] = getJsRpcClient(ioContext);
   auto event = kj::heap<api::JsRpcSessionCustomEvent>(
-      JsRpcSessionCustomEvent::WORKER_RPC_EVENT_TYPE);
+      JsRpcSessionCustomEvent::WORKER_RPC_EVENT_TYPE, kj::mv(sessionSpan));
 
   auto result = event->getCap();
 
@@ -2405,6 +2405,51 @@ kj::Own<WorkerInterface> Fetcher::getClient(
     IoContext& ioContext, kj::Maybe<kj::String> cfStr, kj::ConstString operationName) {
   auto clientWithTracing = getClientWithTracing(ioContext, kj::mv(cfStr), kj::mv(operationName));
   return clientWithTracing.client.attach(kj::mv(clientWithTracing.traceContext));
+}
+
+Fetcher::JsRpcClient Fetcher::getJsRpcClient(IoContext& ioContext) {
+  // The jsRpcSession span is owned by JsRpcSessionCustomEvent and lives for the session.
+  // OutgoingFactory variants create their own outer span, so we skip jsRpcSession for them.
+  auto withSessionSpan = [&](auto startRequest) -> JsRpcClient {
+    auto sessionSpan = ioContext.getCurrentUserTraceSpan().newChild(
+        "jsRpcSession"_kjc, ioContext.now());
+    auto sessionSpanParent = SpanParent(sessionSpan);
+    auto worker = ioContext.getSubrequest(
+        [&](TraceContext& tracing, IoChannelFactory& channelFactory) {
+      return startRequest(channelFactory,
+          IoChannelFactory::SubrequestMetadata{
+            .parentSpan = tracing.getInternalSpanParent(),
+            .userSpanParent = sessionSpanParent.addRef(),
+          });
+    }, {.inHouse = isInHouse, .wrapMetrics = !isInHouse});
+    return {kj::mv(worker), kj::mv(sessionSpan)};
+  };
+
+  KJ_SWITCH_ONEOF(channelOrClientFactory) {
+    // Service binding (e.g. env.MyService) — create jsRpcSession span.
+    KJ_CASE_ONEOF(channel, uint) {
+      return withSessionSpan([&](IoChannelFactory& channelFactory,
+                                 IoChannelFactory::SubrequestMetadata metadata) {
+        return channelFactory.startSubrequest(channel, kj::mv(metadata));
+      });
+    }
+    // Direct in-process channel handle — create jsRpcSession span.
+    KJ_CASE_ONEOF(channel, IoOwn<IoChannelFactory::SubrequestChannel>) {
+      return withSessionSpan([&](IoChannelFactory&,
+                                 IoChannelFactory::SubrequestMetadata metadata) {
+        return channel->startRequest(kj::mv(metadata));
+      });
+    }
+    // DurableObject stub (env.MyActor.get(id)) — factory creates durable_object_subrequest, skip.
+    KJ_CASE_ONEOF(outgoingFactory, IoOwn<OutgoingFactory>) {
+      return {outgoingFactory->newSingleUseClient(kj::none), SpanBuilder(nullptr)};
+    }
+    // Cross-process actor — factory creates its own outer span, skip.
+    KJ_CASE_ONEOF(outgoingFactory, kj::Own<CrossContextOutgoingFactory>) {
+      return {outgoingFactory->newSingleUseClient(ioContext, kj::none), SpanBuilder(nullptr)};
+    }
+  }
+  KJ_UNREACHABLE;
 }
 
 Fetcher::ClientWithTracing Fetcher::getClientWithTracing(
