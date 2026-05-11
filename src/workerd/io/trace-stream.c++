@@ -74,6 +74,7 @@ namespace {
   V(SCHEDULEDTIME, "scheduledTime")                                                                \
   V(SCRIPTNAME, "scriptName")                                                                      \
   V(SCRIPTNOTFOUND, "scriptNotFound")                                                              \
+  V(SCRIPTTAG, "scriptTag")                                                                        \
   V(SCRIPTTAGS, "scriptTags")                                                                      \
   V(SCRIPTVERSION, "scriptVersion")                                                                \
   V(SEQUENCE, "sequence")                                                                          \
@@ -352,6 +353,9 @@ jsg::JsValue ToJs(jsg::Lock& js, const Onset& onset, StringCache& cache) {
   }
   KJ_IF_SOME(name, onset.workerInfo.scriptName) {
     obj.set(js, SCRIPTNAME_STR, js.str(name));
+  }
+  KJ_IF_SOME(id, onset.workerInfo.scriptId) {
+    obj.set(js, SCRIPTTAG_STR, js.str(id));
   }
   KJ_IF_SOME(tags, onset.workerInfo.scriptTags) {
     obj.set(js, SCRIPTTAGS_STR,

@@ -103,6 +103,7 @@ interface Onset {
   readonly entrypoint?: string;
   readonly executionModel: string;
   readonly scriptName?: string;
+  readonly scriptTag?: string;
   readonly scriptTags?: string[];
   readonly scriptVersion?: ScriptVersion;
   readonly preview?: TracePreviewInfo;

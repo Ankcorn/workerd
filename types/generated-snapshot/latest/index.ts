@@ -3235,6 +3235,7 @@ export interface TraceItem {
   readonly entrypoint?: string;
   readonly scriptVersion?: ScriptVersion;
   readonly dispatchNamespace?: string;
+  readonly scriptTag?: string;
   readonly scriptTags?: string[];
   readonly tailAttributes?: Record<string, boolean | number | string>;
   readonly preview?: TracePreviewInfo;
@@ -14637,6 +14638,7 @@ export declare namespace TailStream {
     readonly entrypoint?: string;
     readonly executionModel: string;
     readonly scriptName?: string;
+    readonly scriptTag?: string;
     readonly scriptTags?: string[];
     readonly scriptVersion?: ScriptVersion;
     readonly preview?: TracePreviewInfo;

@@ -121,6 +121,7 @@ class TraceItem final: public jsg::Object {
   jsg::Optional<kj::StringPtr> getEntrypoint();
   jsg::Optional<ScriptVersion> getScriptVersion();
   jsg::Optional<kj::StringPtr> getDispatchNamespace();
+  jsg::Optional<kj::StringPtr> getScriptTag();
   jsg::Optional<kj::Array<kj::StringPtr>> getScriptTags();
   jsg::Optional<TracePreviewInfo> getPreview();
   jsg::Optional<jsg::Dict<TailAttributeValue>> getTailAttributes();
@@ -142,6 +143,7 @@ class TraceItem final: public jsg::Object {
     JSG_LAZY_READONLY_INSTANCE_PROPERTY(entrypoint, getEntrypoint);
     JSG_LAZY_READONLY_INSTANCE_PROPERTY(scriptVersion, getScriptVersion);
     JSG_LAZY_READONLY_INSTANCE_PROPERTY(dispatchNamespace, getDispatchNamespace);
+    JSG_LAZY_READONLY_INSTANCE_PROPERTY(scriptTag, getScriptTag);
     JSG_LAZY_READONLY_INSTANCE_PROPERTY(scriptTags, getScriptTags);
     JSG_LAZY_READONLY_INSTANCE_PROPERTY(tailAttributes, getTailAttributes);
     JSG_LAZY_READONLY_INSTANCE_PROPERTY(preview, getPreview);
@@ -165,6 +167,7 @@ class TraceItem final: public jsg::Object {
   kj::Maybe<kj::String> entrypoint;
   kj::Maybe<ScriptVersion> scriptVersion;
   kj::Maybe<kj::String> dispatchNamespace;
+  kj::Maybe<kj::String> scriptTag;
   jsg::Optional<kj::Array<kj::String>> scriptTags;
   kj::Maybe<kj::Array<tracing::Attribute>> tailAttributes;
   jsg::Optional<TracePreviewInfo> preview;

@@ -483,6 +483,7 @@ KJ_TEST("Read/Write Onset works") {
         .scriptName = kj::str("foo"),
         .preview = TracePreview(kj::str("63bafce9179948688866bb22268eb1c6"),
             kj::str("feature-my-branch"), kj::str("feature/my-branch")),
+        .scriptId = kj::str("3d3100ee0620466c96d0c327007abdc0"),
       },
       nullptr);
   info.copyTo(infoBuilder);
@@ -497,6 +498,7 @@ KJ_TEST("Read/Write Onset works") {
   KJ_ASSERT(preview2.id == "63bafce9179948688866bb22268eb1c6"_kj);
   KJ_ASSERT(preview2.slug == "feature-my-branch"_kj);
   KJ_ASSERT(preview2.name == "feature/my-branch"_kj);
+  KJ_ASSERT(KJ_ASSERT_NONNULL(info2.workerInfo.scriptId) == "3d3100ee0620466c96d0c327007abdc0"_kj);
 
   Onset info3 = info.clone();
   FetchEventInfo& fetchInfo3 = KJ_ASSERT_NONNULL(info3.info.tryGet<FetchEventInfo>());
@@ -507,6 +509,7 @@ KJ_TEST("Read/Write Onset works") {
   KJ_ASSERT(preview3.id == "63bafce9179948688866bb22268eb1c6"_kj);
   KJ_ASSERT(preview3.slug == "feature-my-branch"_kj);
   KJ_ASSERT(preview3.name == "feature/my-branch"_kj);
+  KJ_ASSERT(KJ_ASSERT_NONNULL(info3.workerInfo.scriptId) == "3d3100ee0620466c96d0c327007abdc0"_kj);
 }
 
 KJ_TEST("Read/Write Outcome works") {

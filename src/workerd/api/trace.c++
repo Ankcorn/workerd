@@ -213,6 +213,7 @@ TraceItem::TraceItem(jsg::Lock& js, const Trace& trace)
       entrypoint(mapCopyString(trace.entrypoint)),
       scriptVersion(getTraceScriptVersion(trace)),
       dispatchNamespace(mapCopyString(trace.dispatchNamespace)),
+      scriptTag(mapCopyString(trace.scriptId)),
       scriptTags(getTraceScriptTags(trace)),
       tailAttributes(trace.tailAttributes.map(
           [](auto& tags) { return KJ_MAP(tag, tags) { return tag.clone(); }; })),
@@ -292,6 +293,10 @@ jsg::Optional<ScriptVersion> TraceItem::getScriptVersion() {
 
 jsg::Optional<kj::StringPtr> TraceItem::getDispatchNamespace() {
   return dispatchNamespace.map([](auto& ns) -> kj::StringPtr { return ns; });
+}
+
+jsg::Optional<kj::StringPtr> TraceItem::getScriptTag() {
+  return scriptTag.map([](auto& id) -> kj::StringPtr { return id; });
 }
 
 jsg::Optional<kj::Array<kj::StringPtr>> TraceItem::getScriptTags() {
@@ -791,6 +796,7 @@ void TraceItem::visitForMemoryInfo(jsg::MemoryTracker& tracker) const {
   tracker.trackField("scriptName", scriptName);
   tracker.trackField("scriptVersion", scriptVersion);
   tracker.trackField("dispatchNamespace", dispatchNamespace);
+  tracker.trackField("scriptTag", scriptTag);
   KJ_IF_SOME(tags, scriptTags) {
     for (const auto& tag: tags) {
       tracker.trackField("scriptTag", tag);
